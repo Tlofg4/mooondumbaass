@@ -1,0 +1,968 @@
+<html>
+<body style="margin: 0; padding: 1rem; font-family: monospace; line-height: 1.6; color: var(--color-text-primary); background: var(--color-background-primary);">
+
+<style>
+  ::-webkit-scrollbar { display: none; }
+  * { -ms-overflow-style: none; scrollbar-width: none; }
+</style>
+
+<div style="position: fixed; top: 1rem; right: 1rem; cursor: pointer; z-index: 999;" onclick="toggleTheme()">
+  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="position: absolute; top: 0; right: 0;">
+    <circle cx="12" cy="12" r="5"></circle>
+    <line x1="12" y1="1" x2="12" y2="3"></line>
+    <line x1="12" y1="21" x2="12" y2="23"></line>
+    <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line>
+    <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line>
+    <line x1="1" y1="12" x2="3" y2="12"></line>
+    <line x1="21" y1="12" x2="23" y2="12"></line>
+    <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line>
+    <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line>
+  </svg>
+</div>
+
+<div style="max-width: 500px;">
+  <div id="nav-bar" style="display: flex; gap: 1.5rem; margin-bottom: 0.5rem; flex-wrap: wrap;">
+    <div style="cursor: pointer;" onclick="toggleWeaponsUI()">
+      <span id="armas-label">Weapons</span>
+    </div>
+    <div style="cursor: pointer;" onclick="showStats()">
+      <span id="stats-label">Stats</span>
+    </div>
+    <div style="cursor: pointer;" onclick="showRutinas()">
+      <span id="rutinas-label">Routine</span>
+    </div>
+    <div style="cursor: pointer;" onclick="toggleSensConfig()">
+      <span id="sens-label">Sens</span>
+    </div>
+  </div>
+  <div id="sens-config" style="display:none; margin-bottom:1rem; font-family:monospace;">
+    <div style="margin-bottom:0.4rem;">
+      <span>Random mode: </span>
+      <span id="rand-toggle" onclick="toggleRandMode()" style="cursor:pointer;"></span>
+    </div>
+    <div id="range-config" style="margin-bottom:0.4rem;">
+      <span>Min range: <input type="number" id="sens-min" min="0.5" max="1.5" step="0.05" value="0.5"
+        style="width:48px;background:transparent;border:none;border-bottom:1px solid currentColor;color:inherit;font:inherit;outline:none;text-align:center;"
+        onchange="clampRangeInputs()"> </span>
+      <span>max: <input type="number" id="sens-max" min="0.5" max="1.5" step="0.05" value="1.5"
+        style="width:48px;background:transparent;border:none;border-bottom:1px solid currentColor;color:inherit;font:inherit;outline:none;text-align:center;"
+        onchange="clampRangeInputs()"></span>
+    </div>
+    <div style="font-size:0.85em;">Base sens: <input type="number" id="base-sens" step="0.001" value="0.184" onchange="localStorage.setItem('valofocus_base_sens', this.value)" style="width:60px;background:transparent;border:none;border-bottom:1px solid currentColor;color:inherit;font:inherit;outline:none;text-align:center;"> × multiplier</div>
+  </div>
+  <div id="weapon-selector" style="display: none; margin-bottom: 1.5rem; flex-wrap: wrap; gap: 0.5rem 1rem;"></div>
+  <div id="stats-container" style="display:none; margin-bottom: 1.5rem;"></div>
+  <div id="rutina-list" style="display:none; margin-bottom: 1.5rem;"></div>
+
+  <div id="article-view" style="display:none; margin-bottom: 2rem;"></div>
+
+  <div id="main-content">
+
+  <div style="margin-bottom: 2rem;">
+    <button onclick="generate()" style="padding: 0.5rem 1rem; border: 1px solid var(--color-border-secondary); background: transparent; cursor: pointer; font: inherit; color: inherit;">GENERATE</button>
+  </div>
+
+  <div id="result" style="white-space: pre-wrap; min-height: 120px; padding: 1rem; border: 1px solid var(--color-border-tertiary); margin-bottom: 1rem;"></div>
+
+  <div id="tracker-ui" style="display: none; margin-bottom: 2rem;">
+    <span>kills</span> <input type="number" id="kills-input" min="0" max="40" oninput="if(this.value < 0) this.value = ''; if(this.value > 40) this.value = 40;" style="width: 44px; background: transparent; border: none; border-bottom: 1px solid currentColor; color: inherit; font: inherit; outline: none; margin-right: 1rem; text-align: center;" />
+    <span>acs</span> <input type="number" id="acs-input" min="0" max="99999" oninput="if(this.value < 0) this.value = ''; if(this.value.length > 5) this.value = this.value.slice(0, 5);" style="width: 60px; background: transparent; border: none; border-bottom: 1px solid currentColor; color: inherit; font: inherit; outline: none; margin-right: 1rem; text-align: center;" />
+    <span onclick="saveMatch()" style="cursor: pointer;">[ save ]</span>
+    <span id="tracker-msg" style="margin-left: 1rem;"></span>
+  </div>
+
+
+
+  <div style="cursor: pointer;" onclick="toggleDesc()">
+    <span id="guia-label">Guide</span>
+  </div>
+
+  <div id="descriptions" style="display: none; white-space: pre-wrap; padding: 0; margin-top: 1rem;"></div>
+  </div>
+
+  <template id="all-desc-template">
+Crouch tap spam
+Tap crouch rapidly while shooting.
+
+Crouch peek headshot
+Peek from a corner crouched, shoot for the head.
+
+Counter-strafe tap
+Move one direction, press the opposite, shoot as you stop.
+
+Jiggle peek angles
+Peek and pull back quickly without exposing yourself.
+
+Dead zone peek
+Peek where the enemy has no clear sightline.
+
+Air strafe flick
+While airborne, change direction quickly.
+
+Pre-aim head level
+Keep your crosshair at head height before peeking.
+
+Xhair high then crouch
+Aim high, crouch as you peek.
+
+Instant strafe contact
+See the enemy, strafe sideways to dodge.
+
+Predictive crouch dodge
+Anticipate where they'll shoot and crouch beforehand.
+
+Hold angle crouch tap
+Hold an angle doing tap-tap-tap crouch.
+
+Two bullet burst
+Fire two bullets, small strafe, repeat.
+
+Spam movement keys clear
+Tap keys quickly to clear angles.
+
+Slice angles narrow
+Peek only a small slice of the space.
+
+Long strafe then shoot
+Take several steps before shooting.
+
+Jiggle hold angle
+Hold an angle but keep jiggling constantly.
+
+Dodge bullets movement
+Move laterally to dodge the first shot.
+
+Shoot then instant move
+Shoot and IMMEDIATELY move.
+
+Narrow peak angles
+Peek only as much as needed, no wide swing.
+
+Quick peak info
+Peek quickly just for info, pull back immediately.
+
+Stopping window
+Before peeking an angle, come to a full stop and prepare to shoot. Every kill should feel like a pre-fire.
+
+Crouch tap counter-strafe
+Press the key opposite your strafe and crouch at the same time. If going right: press A + Ctrl simultaneously.
+
+Strafe trace opposite
+Move your mouse toward the opposite side of your strafe. If strafing right, aim left until the crosshair settles on its own.
+
+Miss first adjust fast
+If you miss the first shot, adjust immediately and fire again. Don't give up on the target.
+
+Slow tap 100% acc
+Slow A/D with 100% accuracy. AD 10s → A only 10s → D only 10s. Prioritize not missing any tap.
+
+Fast tap miss correct
+Fast A/D at the edge of your comfort. If you miss, correct WITHOUT leaving the target behind. Train correction speed.
+
+Post-kill flick ready
+After a kill, move laterally and flick immediately to another angle. Never stay static after a kill.
+
+Tapping over spraying
+In DM use only taps, max two bullets per kill. Train the micro-adjustment between shots.
+  </template>
+</div>
+
+<script>
+const weapons = [
+  'Classic', 'Ghost', 'Sheriff', 
+  'Stinger', 'Spectre', 
+  'Bucky', 'Judge', 
+  'Bulldog', 'Guardian', 'Phantom', 'Vandal', 
+  'Marshal', 'Outlaw', 'Operator', 
+  'Ares', 'Odin'
+];
+let selectedWeapons = new Set(['Guardian', 'Sheriff', 'Vandal']);
+const tactics = [
+  'Crouch tap spam',
+  'Crouch peek headshot',
+  'Counter-strafe tap',
+  'Jiggle peek angles',
+  'Dead zone peek',
+  'Air strafe flick',
+  'Pre-aim head level',
+  'Xhair high then crouch',
+  'Instant strafe contact',
+  'Predictive crouch dodge',
+  'Hold angle crouch tap',
+  'Two bullet burst',
+  'Spam movement keys clear',
+  'Slice angles narrow',
+  'Long strafe then shoot',
+  'Jiggle hold angle',
+  'Dodge bullets movement',
+  'Shoot then instant move',
+  'Narrow peak angles',
+  'Quick peak info',
+  'Stopping window',
+  'Crouch tap counter-strafe',
+  'Strafe trace opposite',
+  'Miss first adjust fast',
+  'Slow tap 100% acc',
+  'Fast tap miss correct',
+  'Post-kill flick ready',
+  'Tapping over spraying'
+];
+
+let descState = 0; // 0=hidden, 1=focus only, 2=all
+let themeInverted = false;
+
+function initWeaponSelector() {
+  const container = document.getElementById('weapon-selector');
+  container.innerHTML = weapons.map(w => {
+    const active = selectedWeapons.has(w);
+    return `<span onclick="toggleWeapon('${w}')" id="w-${w}" style="cursor: pointer; ${active ? '' : 'text-decoration: line-through; opacity: 0.4;'}">[${active ? 'x' : ' '}] ${w}</span>`;
+  }).join(' ');
+}
+
+function toggleWeapon(w) {
+  if (selectedWeapons.has(w)) {
+    if (selectedWeapons.size > 1) selectedWeapons.delete(w);
+  } else {
+    selectedWeapons.add(w);
+  }
+  initWeaponSelector();
+}
+
+function toggleWeaponsUI() {
+  const selector = document.getElementById('weapon-selector');
+  const label = document.getElementById('armas-label');
+  if (selector.style.display === 'none') {
+    selector.style.display = 'flex';
+    label.textContent = 'Weapons [config]';
+  } else {
+    selector.style.display = 'none';
+    label.textContent = 'Weapons';
+  }
+}
+
+initWeaponSelector();
+if (localStorage.getItem('valofocus_base_sens')) {
+  document.getElementById('base-sens').value = localStorage.getItem('valofocus_base_sens');
+}
+
+
+let currentMatch = null;
+
+const CUTS = [
+  { max: 0.5071, label:'VERY LOW', cls:'#a04040' },
+  { max: 0.6261, label:'LOW', cls:'#c07040' },
+  { max: 0.8006, label:'NORMAL', cls:'#a0a0a0' },
+  { max: 0.9133, label:'GOOD', cls:'#70b870' },
+  { max: 0.9210, label:'VERY GOOD', cls:'#60bcd4' },
+  { max: Infinity, label:'EXCELLENT', cls:'#f0c040' }
+];
+
+let randMode = true;
+
+function toggleRandMode() {
+  randMode = !randMode;
+  document.getElementById('rand-toggle').textContent = randMode ? '[ON]' : '[OFF]';
+  document.getElementById('range-config').style.display = randMode ? 'block' : 'none';
+}
+
+function toggleSensConfig() {
+  const cfg = document.getElementById('sens-config');
+  const lbl = document.getElementById('sens-label');
+  if (cfg.style.display === 'none') {
+    cfg.style.display = 'block';
+    lbl.textContent = 'Sens [config]';
+    document.getElementById('rand-toggle').textContent = randMode ? '[ON]' : '[OFF]';
+    document.getElementById('range-config').style.display = randMode ? 'block' : 'none';
+  } else {
+    cfg.style.display = 'none';
+    lbl.textContent = 'Sens';
+  }
+}
+
+function clampRangeInputs() {
+  let mn = parseFloat(document.getElementById('sens-min').value);
+  let mx = parseFloat(document.getElementById('sens-max').value);
+  mn = Math.max(0.5, Math.min(1.5, mn));
+  mx = Math.max(0.5, Math.min(1.5, mx));
+  if (mn > mx) mx = mn;
+  document.getElementById('sens-min').value = mn;
+  document.getElementById('sens-max').value = mx;
+}
+
+function generate() {
+  const baseSens = parseFloat(document.getElementById('base-sens').value) || 0.184;
+  let multiplier, sens, sensType, diffPct;
+
+  if (randMode) {
+    const mn = parseFloat(document.getElementById('sens-min').value) || 0.5;
+    const mx = parseFloat(document.getElementById('sens-max').value) || 1.5;
+    multiplier = mn + Math.random() * (mx - mn);
+    sens = (baseSens * multiplier).toFixed(3);
+    diffPct = Math.round(Math.abs(multiplier - 1) * 100);
+    sensType = multiplier >= 1 ? 'Fast' : 'Slow';
+  } else {
+    multiplier = 1.0;
+    sens = (baseSens * multiplier).toFixed(3);
+    diffPct = 0;
+    sensType = 'Fixed';
+  }
+
+  const activePool = Array.from(selectedWeapons);
+  if(activePool.length === 0) return;
+  const weapon = activePool[Math.floor(Math.random() * activePool.length)];
+  const tactic = tactics[Math.floor(Math.random() * tactics.length)];
+
+  const sensLine = randMode
+    ? `SENSITIVITY: ${sens} (${sensType}, ${diffPct}% diff)`
+    : `SENSITIVITY: ${sens} (Fixed)`;
+  const result = `${sensLine}\nWEAPON: ${weapon}\nFOCUS: ${tactic}`;
+  document.getElementById('result').textContent = result;
+
+  currentMatch = { sens: parseFloat(sens), multiplier, diffPct, sensType, weapon, tactic };
+  document.getElementById('tracker-ui').style.display = 'block';
+  document.getElementById('tracker-msg').textContent = '';
+  document.getElementById('kills-input').value = '';
+  document.getElementById('acs-input').value = '';
+}
+
+function saveMatch() {
+  if (!currentMatch) return;
+  const k = parseFloat(document.getElementById('kills-input').value) || 0;
+  const acs = parseFloat(document.getElementById('acs-input').value) || 0;
+  if (!k && !acs) return;
+
+  const s = (k/40)*0.60 + (acs/15000)*0.40;
+  let tier = CUTS[CUTS.length-1];
+  for (let i = 0; i < CUTS.length; i++) {
+    if (s <= CUTS[i].max) { tier = CUTS[i]; break; }
+  }
+
+  currentMatch.k = k;
+  currentMatch.acs = acs;
+  currentMatch.score = s;
+  currentMatch.tierLabel = tier.label;
+  currentMatch.tierColor = tier.cls;
+  currentMatch.ts = Date.now();
+
+  let matches = JSON.parse(localStorage.getItem('valofocus_matches') || '[]');
+  matches.push(currentMatch);
+  localStorage.setItem('valofocus_matches', JSON.stringify(matches));
+
+  document.getElementById('tracker-msg').innerHTML = `[ <span style="color:${tier.cls};">${tier.label}</span> ] saved`;
+}
+
+function showRutinas() {
+  const list = document.getElementById('rutina-list');
+  const label = document.getElementById('rutinas-label');
+  if (list.style.display === 'block') {
+    list.style.display = 'none';
+    label.textContent = 'Routine';
+    return;
+  }
+  label.textContent = 'Routine [list]';
+  list.innerHTML = `
+    <div style="margin-top:0.5rem;">
+      <span onclick="openArticle('mov')" style="cursor:pointer;">[ movement ]</span><br>
+      <span onclick="openArticle('aim')" style="cursor:pointer;">[ aim (oxy) ]</span><br>
+      <span onclick="openOnichan()" style="cursor:pointer;">[ onichan (kovaaks) ]</span>
+    </div>`;
+  list.style.display = 'block';
+}
+
+const articles = {
+  mov: `======================================================================
+  MOVEMENT ROUTINE (RADIANT LEVEL)
+======================================================================
+
+LEVEL 1: PRECISION (Left Hand + Right Hand)
+- Drill: Reverse Trace. Strafe right and keep your crosshair
+  on the left side of the bot. Release D and let the crosshair
+  settle smoothly onto the head.
+- Goal: Sync movement with micro-adjustment.
+
+LEVEL 2: SNAPPINESS (Stopping speed)
+- Concept: "Stopping Windows". Before every possible fight,
+  come to a full stop. Every kill should feel like a pre-fire.
+- Drill: "Slice the pie" on the range. Picture the angles of a map
+  and clear each one by stopping and firing instantly.
+
+LEVEL 3: EVASIVENESS (Micro-movements)
+- Crouch Tapping: Crouch right at the moment of the counter-strafe.
+  If going right (D), press A + CTRL at the same time.
+- Dynamic Tapping: If you miss the first tap, strafe again
+  and fire a short burst. Don't freeze after missing.
+
+----------------------------------------------------------------------
+<span id="back-btn" style="cursor:pointer;">[ back ]</span>`,
+  aim: `======================================================================
+  AIM ROUTINE (C9 OXY STYLE)
+======================================================================
+
+PHASE 1: DM TAPPING (10-15 min)
+- Play a DM using ONLY taps.
+- Goal: Warm up the left hand (positioning) and the
+  right hand (micro-adjustments).
+
+PHASE 2: THE RANGE (4 min)
+- AD Strafe (30s): Taps only, 100% accuracy. Slow and smooth.
+- Fast Mode (30s): Push to the edge of your speed. If you miss the
+  first shot, correct it as fast as possible. Don't leave bots behind.
+- 50 Elims: Uncomfortable speed. Practice correcting after the first miss.
+
+PHASE 3: POST-KILL FLICK
+- After every kill in DM, strafe laterally and
+  immediately flick to another angle.
+- This trains you to be ready for the next duel and not "zone out"
+  after a kill.
+
+----------------------------------------------------------------------
+<span id="back-btn" style="cursor:pointer;">[ back ]</span>`
+};
+
+function openArticle(id) {
+  const view = document.getElementById('article-view');
+  const main = document.getElementById('main-content');
+  const nav = document.getElementById('nav-bar');
+  
+  view.innerHTML = `<pre style="margin:0; font-family: monospace; white-space:pre-wrap;">${articles[id]}</pre>`;
+  
+  document.getElementById('back-btn').onclick = () => {
+    view.style.display = 'none';
+    main.style.display = 'block';
+    nav.style.display = 'flex';
+  };
+
+  main.style.display = 'none';
+  nav.style.display = 'none';
+  view.style.display = 'block';
+}
+function showStats() {
+  const container = document.getElementById('stats-container');
+  const label = document.getElementById('stats-label');
+
+  if (container.style.display === 'block') {
+    container.style.display = 'none';
+    label.textContent = 'Stats';
+    return;
+  }
+
+  label.textContent = 'Stats [history]';
+
+  const matches = JSON.parse(localStorage.getItem('valofocus_matches') || '[]');
+  if (matches.length === 0) {
+    container.innerHTML = '<pre style="margin:0;font-family:monospace;">  No data.</pre>';
+    container.style.display = 'block';
+    return;
+  }
+
+  // --- aggregate ---
+  const byWeapon = {}, byTactic = {}, bySensType = {};
+  let totalScore = 0, totalK = 0, totalAcs = 0;
+  const recent5 = matches.slice(-5);
+  const recent5Avg = recent5.reduce((a, m) => a + m.score, 0) / recent5.length;
+  const older = matches.slice(0, -5);
+  const olderAvg = older.length ? older.reduce((a, m) => a + m.score, 0) / older.length : null;
+
+  // Sensitivity buckets: 0.5-1.5 in steps of 0.1
+  const BUCKET_MIN = 0.5, BUCKET_MAX = 1.5, BUCKET_STEP = 0.1;
+  const numBuckets = Math.round((BUCKET_MAX - BUCKET_MIN) / BUCKET_STEP);
+  const sensBuckets = Array.from({length: numBuckets}, () => ({ sum: 0, count: 0 }));
+
+  matches.forEach(m => {
+    const s = m.score || 0;
+    totalScore += s;
+    totalK += m.k || 0;
+    totalAcs += m.acs || 0;
+
+    if (!byWeapon[m.weapon]) byWeapon[m.weapon] = { total:0, scoreSum:0 };
+    byWeapon[m.weapon].total++;
+    byWeapon[m.weapon].scoreSum += s;
+
+    if (!byTactic[m.tactic]) byTactic[m.tactic] = { total:0, scoreSum:0 };
+    byTactic[m.tactic].total++;
+    byTactic[m.tactic].scoreSum += s;
+
+    const st = m.sensType || 'Fast';
+    if (!bySensType[st]) bySensType[st] = { total:0, scoreSum:0 };
+    bySensType[st].total++;
+    bySensType[st].scoreSum += s;
+
+    // bucket by multiplier (0.5..1.5)
+    const baseSens = parseFloat(document.getElementById('base-sens').value) || 0.184;
+    const mult = m.multiplier != null ? m.multiplier : (parseFloat(m.sens) / baseSens);
+    const bIdx = Math.min(numBuckets - 1, Math.max(0, Math.floor((mult - BUCKET_MIN) / BUCKET_STEP)));
+    sensBuckets[bIdx].sum += s;
+    sensBuckets[bIdx].count++;
+  });
+
+  const n = matches.length;
+  const avgScore = (totalScore / n * 100).toFixed(1);
+  const avgK = (totalK / n).toFixed(1);
+  const avgAcs = Math.round(totalAcs / n);
+
+  let trendLine = '';
+  if (olderAvg !== null) {
+    const delta = ((recent5Avg - olderAvg) * 100).toFixed(1);
+    trendLine = delta >= 0 ? `+${delta}% vs history` : `${delta}% vs history`;
+  } else {
+    trendLine = 'not enough data';
+  }
+
+  // --- history table ---
+  let tableTxt = '';
+  [...matches].reverse().slice(0, 20).forEach(m => {
+    const pct = Math.round(m.score * 100);
+    const tact = m.tactic.length > 12 ? m.tactic.substring(0,10)+'..' : m.tactic.padEnd(12);
+    tableTxt += `  ${String(m.sens).padStart(5)} (${(m.sensType||'?')[0]}) | ${m.weapon.padEnd(8)} | ${tact} | K:${String(m.k).padEnd(2)} ACS:${String(m.acs).padEnd(5)} | ${pct}% ${m.tierLabel}\n`;
+  });
+  if (matches.length > 20) tableTxt += `  ... (${matches.length - 20} more)\n`;
+
+  // --- sensitivity performance chart data ---
+  const bucketAvgs = sensBuckets.map(b => b.count > 0 ? b.sum / b.count : null);
+  const defined = bucketAvgs.filter(v => v !== null);
+  const chartMax = defined.length ? Math.max(...defined) : 1;
+
+  // collect SVG points
+  const svgPts = [];
+  bucketAvgs.forEach((v, i) => {
+    if (v !== null) {
+      const mx = BUCKET_MIN + (i + 0.5) * BUCKET_STEP;
+      svgPts.push({ mx, v, count: sensBuckets[i].count, rawI: i });
+    }
+  });
+
+  // --- weapon breakdown ---
+  const wSorted = Object.keys(byWeapon).sort((a,b) =>
+    (byWeapon[b].scoreSum/byWeapon[b].total) - (byWeapon[a].scoreSum/byWeapon[a].total));
+  let weaponTxt = '';
+  wSorted.forEach(w => {
+    const avg = (byWeapon[w].scoreSum / byWeapon[w].total * 100).toFixed(1);
+    weaponTxt += `      ${w.padEnd(10)} [ ${avg.padStart(5)}% ]\n`;
+  });
+
+  // --- tactic breakdown ---
+  const tSorted = Object.keys(byTactic).sort((a,b) =>
+    (byTactic[b].scoreSum/byTactic[b].total) - (byTactic[a].scoreSum/byTactic[a].total));
+  let tacticTxt = '';
+  tSorted.slice(0, 5).forEach(t => {
+    const avg = (byTactic[t].scoreSum / byTactic[t].total * 100).toFixed(1);
+    const n2 = byTactic[t].total;
+    tacticTxt += `      ${t.padEnd(26)} [ ${avg.padStart(5)}% ] (${n2})\n`;
+  });
+  let tacticBotTxt = '';
+  tSorted.slice(-3).reverse().forEach(t => {
+    const avg = (byTactic[t].scoreSum / byTactic[t].total * 100).toFixed(1);
+    tacticBotTxt += `      ${t.padEnd(26)} [ ${avg.padStart(5)}% ]\n`;
+  });
+
+  // --- sens type breakdown ---
+  let sensTypeTxt = '';
+  Object.keys(bySensType).forEach(st => {
+    const avg = (bySensType[st].scoreSum / bySensType[st].total * 100).toFixed(1);
+    sensTypeTxt += `      ${st.padEnd(8)} ${avg.padStart(5)}% avg  (${bySensType[st].total} matches)\n`;
+  });
+
+  // --- assemble ---
+  let txt = '';
+  txt += `======================================================================\n`;
+  txt += `  OVERALL SUMMARY  (${n} matches)\n`;
+  txt += `======================================================================\n`;
+  txt += `  Avg score:   ${avgScore}%\n`;
+  txt += `  Avg kills:   ${avgK}\n`;
+  txt += `  Avg ACS:     ${avgAcs}\n`;
+  txt += `  Trend:       ${trendLine}\n\n`;
+
+  txt += `======================================================================\n`;
+  txt += `  RECENT HISTORY (last 20)\n`;
+  txt += `======================================================================\n`;
+  txt += tableTxt + '\n';
+
+  txt += `======================================================================\n`;
+  txt += `  PERFORMANCE BY WEAPON\n`;
+  txt += `======================================================================\n`;
+  txt += weaponTxt + '\n';
+
+  txt += `======================================================================\n`;
+  txt += `  PERFORMANCE BY FOCUS\n`;
+  txt += `======================================================================\n`;
+  txt += `  [+] best:\n` + tacticTxt;
+  txt += `\n  [-] worst:\n` + tacticBotTxt + '\n';
+
+  txt += `======================================================================\n`;
+  txt += `  PERFORMANCE BY SENSITIVITY TYPE\n`;
+  txt += `======================================================================\n`;
+  txt += sensTypeTxt + '\n';
+
+  txt += `  <span onclick="if(confirm('Delete history?')&&confirm('Are you REALLY sure?')){localStorage.removeItem('valofocus_matches');showStats();showStats();}" style="cursor:pointer;">[delete history]</span>\n`;
+
+  // --- build SVG smooth curve chart ---
+  const isDark = themeInverted;
+  const fg = isDark ? '#ffffff' : '#000000';
+  const bg = isDark ? '#000000' : '#ffffff';
+  const svgW = 460, svgH = 170;
+  const padL = 38, padR = 12, padT = 20, padB = 38;
+  const cW = svgW - padL - padR, cH = svgH - padT - padB;
+  const baseSens = parseFloat(document.getElementById('base-sens').value) || 0.184;
+
+  function toSvgPx(mx, v) {
+    return {
+      px: padL + ((mx - BUCKET_MIN) / (BUCKET_MAX - BUCKET_MIN)) * cW,
+      py: padT + cH - (v / (chartMax || 1)) * cH
+    };
+  }
+
+  function buildPath(pts) {
+    if (pts.length === 0) return '';
+    if (pts.length === 1) return `M ${pts[0].px.toFixed(2)} ${pts[0].py.toFixed(2)}`;
+    const nn = pts.length, dx = [], sl = [], t = [];
+    for (let i = 0; i < nn-1; i++) { dx[i]=pts[i+1].px-pts[i].px; sl[i]=(pts[i+1].py-pts[i].py)/dx[i]; }
+    t[0]=sl[0];
+    for (let i=1;i<nn-1;i++) t[i]=(sl[i-1]+sl[i])/2;
+    t[nn-1]=sl[nn-2];
+    for (let i=0;i<nn-1;i++) {
+      if(sl[i]===0){t[i]=t[i+1]=0;continue;}
+      const s=(t[i]/sl[i])*(t[i]/sl[i])+(t[i+1]/sl[i])*(t[i+1]/sl[i]);
+      if(s>9){const k=3/Math.sqrt(s);t[i]=k*(t[i]/sl[i])*sl[i];t[i+1]=k*(t[i+1]/sl[i])*sl[i];}
+    }
+    let d=`M ${pts[0].px.toFixed(2)} ${pts[0].py.toFixed(2)}`;
+    for (let i=0;i<nn-1;i++) {
+      d+=` C ${(pts[i].px+dx[i]/3).toFixed(2)} ${(pts[i].py+t[i]*dx[i]/3).toFixed(2)}, ${(pts[i+1].px-dx[i]/3).toFixed(2)} ${(pts[i+1].py-t[i+1]*dx[i]/3).toFixed(2)}, ${pts[i+1].px.toFixed(2)} ${pts[i+1].py.toFixed(2)}`;
+    }
+    return d;
+  }
+
+  const svgCoords = svgPts.map(p => { const {px,py}=toSvgPx(p.mx,p.v); return {...p,px,py}; });
+  const pathD = buildPath(svgCoords);
+
+  let yMarkup = '';
+  for (let i=0;i<=4;i++) {
+    const vy=(i/4*chartMax*100).toFixed(0);
+    const py=(padT+cH-(i/4)*cH).toFixed(1);
+    yMarkup+=`<line x1="${padL}" y1="${py}" x2="${padL+cW}" y2="${py}" stroke="currentColor" stroke-width="0.5" opacity="0.15"/>`;
+    yMarkup+=`<text x="${padL-5}" y="${(+py+3.5).toFixed(1)}" text-anchor="end" font-size="12" fill="currentColor" font-family="monospace">${vy}%</text>`;
+  }
+
+  let xMarkup = '';
+  [0.5,0.7,0.9,1.1,1.3,1.5].forEach(mv => {
+    const px=(padL+((mv-BUCKET_MIN)/(BUCKET_MAX-BUCKET_MIN))*cW).toFixed(1);
+    xMarkup+=`<line x1="${px}" y1="${padT+cH}" x2="${px}" y2="${padT+cH+4}" stroke="currentColor" stroke-width="1" opacity="0.3"/>`;
+    xMarkup+=`<text x="${px}" y="${padT+cH+16}" text-anchor="middle" font-size="12" fill="currentColor" font-family="monospace">${mv.toFixed(1)}</text>`;
+  });
+
+  const dotMarkup = svgCoords.map(p =>
+    `<circle cx="${p.px.toFixed(2)}" cy="${p.py.toFixed(2)}" r="3.5" fill="${bg}" stroke="currentColor" stroke-width="1.6"/>` +
+    `<text x="${p.px.toFixed(1)}" y="${(p.py-9).toFixed(1)}" text-anchor="middle" font-size="12" fill="currentColor" font-family="monospace">${(p.v*100).toFixed(0)}%</text>`
+  ).join('');
+
+  const areaPath = svgCoords.length >= 2
+    ? `<path d="${pathD} L ${svgCoords[svgCoords.length-1].px.toFixed(2)} ${padT+cH} L ${svgCoords[0].px.toFixed(2)} ${padT+cH} Z" fill="currentColor" opacity="0.08"/>` : '';
+
+  const noDataNote = svgCoords.length === 0
+    ? `<text x="${padL+cW/2}" y="${padT+cH/2}" text-anchor="middle" font-size="12" fill="currentColor" font-family="monospace">no data yet</text>` : '';
+
+  const svgBlock = `<div style="margin:0.5rem 0 1rem 0;">
+  <div style="font-family:monospace;font-size:12px;margin-bottom:0.3rem;">PERFORMANCE CURVE BY SENSITIVITY</div>
+  <svg id="stats-svg" width="${svgW}" height="${svgH}" data-avgs='${JSON.stringify(bucketAvgs)}' style="display:block;max-width:100%;overflow:visible;color:inherit;">
+    ${yMarkup}
+    <line x1="${padL}" y1="${padT}" x2="${padL}" y2="${padT+cH}" stroke="currentColor" stroke-width="1"/>
+    <line x1="${padL}" y1="${padT+cH}" x2="${padL+cW}" y2="${padT+cH}" stroke="currentColor" stroke-width="1"/>
+    ${xMarkup}
+    ${areaPath}
+    ${svgCoords.length >= 2 ? `<path d="${pathD}" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>` : ''}
+    ${svgCoords.length === 1 ? `<circle cx="${svgCoords[0].px}" cy="${svgCoords[0].py}" r="3" fill="currentColor"/>` : ''}
+    ${dotMarkup}
+    
+    <line id="chart-marker" x1="0" y1="${padT}" x2="0" y2="${padT+cH}" stroke="currentColor" stroke-width="1" stroke-dasharray="3,2" style="display:none; pointer-events:none;"></line>
+    <text id="chart-tip-text" x="${padL + cW/2}" y="${padT - 5}" text-anchor="middle" font-size="12" fill="currentColor" font-family="monospace" style="display:none; pointer-events:none;"></text>
+
+    <rect x="${padL}" y="${padT}" width="${cW}" height="${cH}" fill="transparent" style="cursor:crosshair;"
+      onmousemove="
+        const svg = document.getElementById('stats-svg');
+        const pt = svg.createSVGPoint();
+        pt.x = event.clientX; pt.y = event.clientY;
+        const loc = pt.matrixTransform(svg.getScreenCTM().inverse());
+        const x = Math.max(${padL}, Math.min(${padL + cW}, loc.x));
+        const mult = ${BUCKET_MIN} + ((x - ${padL}) / ${cW}) * (${BUCKET_MAX} - ${BUCKET_MIN});
+        const bIdx = Math.min(${numBuckets - 1}, Math.max(0, Math.floor((mult - ${BUCKET_MIN}) / ${BUCKET_STEP})));
+        const avgs = JSON.parse(svg.getAttribute('data-avgs'));
+        const score = avgs[bIdx];
+        const baseSens = parseFloat(document.getElementById('base-sens').value) || 0.184;
+        const tip = 'Sens: ' + (baseSens * mult).toFixed(3) + (score !== null ? ' | Score: ' + (score * 100).toFixed(1) + '%' : ' | (no data)');
+        
+        const marker = document.getElementById('chart-marker');
+        marker.setAttribute('x1', x); marker.setAttribute('x2', x);
+        marker.style.display = 'block';
+        const txt = document.getElementById('chart-tip-text');
+        txt.textContent = tip;
+        txt.style.display = 'block';
+      "
+      onmouseleave="
+        document.getElementById('chart-marker').style.display='none';
+        document.getElementById('chart-tip-text').style.display='none';
+      "></rect>
+
+    ${noDataNote}
+    <text x="${padL+cW/2}" y="${svgH-2}" text-anchor="middle" font-size="12" fill="currentColor" font-family="monospace">mult × ${baseSens} = actual sens</text>
+  </svg>
+  <div style="font-family:monospace;font-size:12px;margin-top:0.3rem;">0.5→${(baseSens*0.5).toFixed(3)} | 1.0→${(baseSens*1.0).toFixed(3)} | 1.5→${(baseSens*1.5).toFixed(3)}</div>
+</div>`;
+
+  container.innerHTML =
+    `<pre style="margin:0;font-family:monospace;white-space:pre-wrap;">${txt}</pre>` + svgBlock;
+  container.style.display = 'block';
+}
+
+
+const descMap = {
+  'Crouch tap spam': 'Tap crouch rapidly while shooting.',
+  'Crouch peek headshot': 'Peek from a corner crouched, shoot for the head.',
+  'Counter-strafe tap': 'Move one direction, press the opposite, shoot as you stop.',
+  'Jiggle peek angles': 'Peek and pull back quickly without exposing yourself.',
+  'Dead zone peek': 'Peek where the enemy has no clear sightline.',
+  'Air strafe flick': 'While airborne, change direction quickly.',
+  'Pre-aim head level': 'Keep your crosshair at head height before peeking.',
+  'Xhair high then crouch': 'Aim high, crouch as you peek.',
+  'Instant strafe contact': 'See the enemy, strafe sideways to dodge.',
+  'Predictive crouch dodge': 'Anticipate where they will shoot and crouch beforehand.',
+  'Hold angle crouch tap': 'Hold an angle doing tap-tap-tap crouch.',
+  'Two bullet burst': 'Fire two bullets, small strafe, repeat.',
+  'Spam movement keys clear': 'Tap keys quickly to clear angles.',
+  'Slice angles narrow': 'Peek only a small slice of the space.',
+  'Long strafe then shoot': 'Take several steps before shooting.',
+  'Jiggle hold angle': 'Hold an angle but keep jiggling constantly.',
+  'Dodge bullets movement': 'Move laterally to dodge the first shot.',
+  'Shoot then instant move': 'Shoot and IMMEDIATELY move.',
+  'Narrow peak angles': 'Peek only as much as needed, no wide swing.',
+  'Quick peak info': 'Peek quickly just for info, pull back immediately.',
+  'Stopping window': 'Before peeking an angle, come to a full stop and prepare to shoot. The goal is for every kill to feel like a pre-fire.',
+  'Crouch tap counter-strafe': 'Press the key opposite your strafe and crouch at the same time. If going right: press A + Ctrl simultaneously.',
+  'Strafe trace opposite': 'Move your mouse toward the opposite side of your strafe to acquire the target. If strafing right, aim left until the crosshair settles naturally.',
+  'Miss first adjust fast': 'If you miss the first shot, adjust immediately and fire again. Do not give up on the target.',
+  'Slow tap 100% acc': 'Slow A/D with 100% accuracy. First AD 10s, then A only 10s, then D only 10s. Prioritize not missing any tap.',
+  'Fast tap miss correct': 'Fast A/D at the edge of your comfort. If you miss, correct WITHOUT leaving the target behind. Train correction speed.',
+  'Post-kill flick ready': 'After a kill, move laterally and immediately flick to another angle to stay ready. Never stay static after a kill.',
+  'Tapping over spraying': 'In DM use taps instead of bursts or spray. Every kill should be one tap or two bullets max. Train the micro-adjustment between taps.'
+};
+
+function toggleDesc() {
+  descState = (descState + 1) % 3;
+  const desc = document.getElementById('descriptions');
+
+  if (descState === 0) {
+    // Hidden
+    desc.style.display = 'none';
+    document.getElementById('guia-label').textContent = 'Guide';
+  } else if (descState === 1) {
+    // Show only current focus
+    const resultText = document.getElementById('result').textContent;
+    const match = resultText.match(/FOCUS: (.+)/);
+    if (match && descMap[match[1]]) {
+      desc.textContent = match[1] + '\n' + descMap[match[1]];
+      desc.style.display = 'block';
+      document.getElementById('guia-label').textContent = 'Guide [focus]';
+    } else {
+      // No focus generated yet, skip to all
+      descState = 2;
+      const tmpl = document.getElementById('all-desc-template');
+      desc.textContent = tmpl.innerHTML.replace(/^\n/, '');
+      desc.style.display = 'block';
+      document.getElementById('guia-label').textContent = 'Guide [all]';
+    }
+  } else {
+    // Show all
+    const tmpl = document.getElementById('all-desc-template');
+    desc.textContent = tmpl.innerHTML.replace(/^\n/, '');
+    desc.style.display = 'block';
+    document.getElementById('guia-label').textContent = 'Guide [all]';
+  }
+}
+
+// ===== ONICHAN TRACKER =====
+const ONICHAN_EXERCISES = [
+  { name: 'Amare GarfMicroTS',          author: '55AMARE55',  type: 'clicking', desc: 'Track the small target moving right to left. Trains microflicks for 2-bullet sprays.' },
+  { name: 'eth 1w4tes Micro',            author: 'etherelkgg', type: 'clicking', desc: 'Accuracy over speed. Keep at least 90% hit rate. 1 minute.' },
+  { name: 'eth FP OGG Micro 60',         author: 'etherelkgg', type: 'clicking', desc: 'Shoot the middle square for 1 minute without losing. If you die, repeat.' },
+  { name: 'Amare Dynamic TAF Micro',     author: '55AMARE55',  type: 'clicking', desc: 'Large + small target alternating. Macro flick → microflick. The small one disappears, the large one is always there.' },
+  { name: 'eth Valorant Micro Reactive', author: 'etherelkgg', type: 'tracking', desc: 'Random reaction target. Keep your crosshair path as straight as possible. Pure reaction time.' },
+];
+
+function calcStreak(sessions) {
+  if (!sessions.length) return 0;
+  const days = [...new Set(sessions.map(s => s.date))].sort().reverse();
+  let streak = 1;
+  for (let i = 1; i < days.length; i++) {
+    const prev = new Date(days[i-1]);
+    const curr = new Date(days[i]);
+    const diff = (prev - curr) / 86400000;
+    if (Math.round(diff) === 1) streak++;
+    else break;
+  }
+  return streak;
+}
+
+function openOnichan() {
+  const view = document.getElementById('article-view');
+  const main = document.getElementById('main-content');
+  const nav  = document.getElementById('nav-bar');
+
+  main.style.display = 'none';
+  nav.style.display = 'none';
+  view.style.display = 'block';
+  renderOnichan(view, main, nav);
+}
+
+function renderOnichan(view, main, nav) {
+  const today = new Date().toLocaleDateString('es-MX');
+  let st = JSON.parse(localStorage.getItem('onichan_state') || 'null');
+  if (!st || st.date !== today) {
+    st = { date: today, done: [false,false,false,false,false] };
+    localStorage.setItem('onichan_state', JSON.stringify(st));
+  }
+  const sess = JSON.parse(localStorage.getItem('onichan_sessions') || '[]');
+  const tdSess = sess.filter(s => s.date === today).length;
+  const allDone = st.done.every(Boolean);
+  const doneCount = st.done.filter(Boolean).length;
+  const streak = calcStreak(sess);
+
+  // DM data
+  const dms = JSON.parse(localStorage.getItem('onichan_dms') || '[]');
+  const todayDms = dms.filter(d => d.date === today);
+  const dmW = todayDms.filter(d => d.result === 'W').length;
+  const dmL = todayDms.filter(d => d.result === 'L').length;
+  const dmTotal = todayDms.length;
+
+  const rows = ONICHAN_EXERCISES.map((ex, i) => {
+    const checked = st.done[i];
+    const typeColor = ex.type === 'tracking' ? '#5b9bd5' : '#e05252';
+    return `<div style="margin-bottom:1.1rem;opacity:${checked ? '0.45' : '1'};">
+  <div style="display:flex;align-items:flex-start;gap:0.6rem;cursor:pointer;" onclick="onichanToggle(${i})">
+    <span style="min-width:1.4rem;font-family:monospace;">${checked ? '[x]' : '[ ]'}</span>
+    <div>
+      <div style="font-family:monospace;font-weight:bold;${checked ? 'text-decoration:line-through;' : ''}">${ex.name}</div>
+      <div style="font-size:0.78rem;opacity:0.5;margin-bottom:0.25rem;font-family:monospace;">${ex.author} · <span style="color:${typeColor};">${ex.type}</span></div>
+      <div style="font-size:0.82rem;opacity:0.72;max-width:360px;white-space:pre-wrap;">${ex.desc}</div>
+    </div>
+  </div>
+</div>`;
+  }).join('');
+
+  const bar = `<div style="margin:0.8rem 0 1.3rem;font-family:monospace;">
+  <div style="font-size:0.8rem;margin-bottom:0.35rem;">${doneCount}/5${allDone ? ' · ✓ kovaaks done' : ''}  ·  sessions today: ${tdSess}${streak > 1 ? '  ·  streak ' + streak + 'd' : ''}</div>
+  <div style="height:3px;background:rgba(128,128,128,0.2);border-radius:2px;width:260px;">
+    <div style="height:3px;background:currentColor;border-radius:2px;width:${(doneCount / 5 * 100).toFixed(0)}%;transition:width 0.3s;"></div>
+  </div>
+</div>`;
+
+  const dmDots = todayDms.map(d =>
+    `<span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:${d.result==='W'?'#5cb85c':'#d9534f'};margin-right:4px;"></span>`
+  ).join('');
+
+  const dmSection = `<div style="margin-top:1.5rem;padding-top:1rem;border-top:1px solid rgba(128,128,128,0.2);font-family:monospace;">
+  <div style="font-size:0.85rem;font-weight:bold;margin-bottom:0.55rem;letter-spacing:0.04em;">DEATHMATCH</div>
+  <div style="font-size:0.8rem;margin-bottom:0.55rem;">
+    today: ${dmTotal} dm${dmTotal!==1?'s':''}${dmTotal>0?`&nbsp;·&nbsp;<span style="color:#5cb85c;">${dmW}W</span>&nbsp;<span style="color:#d9534f;">${dmL}L</span>`:''}
+  </div>
+  ${dmDots?`<div style="margin-bottom:0.7rem;line-height:2;">${dmDots}</div>`:''}
+  <div style="display:flex;gap:0.7rem;align-items:center;flex-wrap:wrap;">
+    <span onclick="dmAdd('W')" style="cursor:pointer;padding:0.2rem 0.8rem;border:1px solid #5cb85c;color:#5cb85c;font-family:monospace;user-select:none;">[ W ]</span>
+    <span onclick="dmAdd('L')" style="cursor:pointer;padding:0.2rem 0.8rem;border:1px solid #d9534f;color:#d9534f;font-family:monospace;user-select:none;">[ L ]</span>
+    ${dmTotal>0?`<span onclick="dmUndo()" style="cursor:pointer;opacity:0.4;font-size:0.8rem;font-family:monospace;">[ undo ]</span>`:''}
+  </div>
+</div>`;
+
+  const btns = `<div style="margin-top:1.4rem;font-family:monospace;display:flex;gap:1.2rem;flex-wrap:wrap;align-items:center;">
+  ${allDone ? `<span onclick="onichanComplete()" style="cursor:pointer;">[ save session ]</span>` : ''}
+  <span onclick="onichanReset()" style="cursor:pointer;opacity:0.4;font-size:0.85rem;">[ reset kovaaks ]</span>
+  <span id="onichan-back" style="cursor:pointer;opacity:0.7;">[ back ]</span>
+</div>
+<div id="onichan-msg" style="font-family:monospace;font-size:0.85rem;margin-top:0.5rem;min-height:1.2rem;"></div>
+<div style="margin-top:1.4rem;font-size:0.75rem;opacity:0.35;font-family:monospace;">80% clicking · 20% tracking · &lt;1 min · viizzzm / KovaaKs</div>`;
+
+  view.innerHTML = `<div style="padding-bottom:2rem;">
+<div style="font-family:monospace;font-size:1.1rem;font-weight:bold;margin-bottom:0.15rem;letter-spacing:0.06em;">ONICHAN</div>
+<div style="font-family:monospace;font-size:0.78rem;opacity:0.4;margin-bottom:1rem;">KovaaKs routine · ViiZzzm</div>
+${bar}${rows}${dmSection}${btns}
+</div>`;
+
+  document.getElementById('onichan-back').onclick = () => {
+    view.style.display = 'none';
+    main.style.display = 'block';
+    nav.style.display = 'flex';
+  };
+}
+
+function onichanToggle(i) {
+  const today = new Date().toLocaleDateString('es-MX');
+  let st = JSON.parse(localStorage.getItem('onichan_state') || 'null') || { date: today, done: [false,false,false,false,false] };
+  if (st.date !== today) st = { date: today, done: [false,false,false,false,false] };
+  st.done[i] = !st.done[i];
+  localStorage.setItem('onichan_state', JSON.stringify(st));
+  const view = document.getElementById('article-view');
+  const main = document.getElementById('main-content');
+  const nav  = document.getElementById('nav-bar');
+  renderOnichan(view, main, nav);
+}
+
+function onichanComplete() {
+  const today = new Date().toLocaleDateString('es-MX');
+  let sess = JSON.parse(localStorage.getItem('onichan_sessions') || '[]');
+  sess.push({ date: today, ts: Date.now() });
+  localStorage.setItem('onichan_sessions', JSON.stringify(sess));
+  localStorage.setItem('onichan_state', JSON.stringify({ date: today, done: [false,false,false,false,false] }));
+  const view = document.getElementById('article-view');
+  const main = document.getElementById('main-content');
+  const nav  = document.getElementById('nav-bar');
+  renderOnichan(view, main, nav);
+  const msg = document.getElementById('onichan-msg');
+  if (msg) msg.textContent = '✓ session saved · go rank up!';
+}
+
+function dmAdd(result) {
+  const today = new Date().toLocaleDateString('es-MX');
+  const dms = JSON.parse(localStorage.getItem('onichan_dms') || '[]');
+  dms.push({ date: today, result, ts: Date.now() });
+  localStorage.setItem('onichan_dms', JSON.stringify(dms));
+  const view = document.getElementById('article-view');
+  const main = document.getElementById('main-content');
+  const nav  = document.getElementById('nav-bar');
+  renderOnichan(view, main, nav);
+}
+
+function dmUndo() {
+  const today = new Date().toLocaleDateString('es-MX');
+  const dms = JSON.parse(localStorage.getItem('onichan_dms') || '[]');
+  const idx = dms.map((d,i)=>d.date===today?i:-1).filter(i=>i>=0);
+  if (idx.length) dms.splice(idx[idx.length-1], 1);
+  localStorage.setItem('onichan_dms', JSON.stringify(dms));
+  const view = document.getElementById('article-view');
+  const main = document.getElementById('main-content');
+  const nav  = document.getElementById('nav-bar');
+  renderOnichan(view, main, nav);
+}
+
+function onichanReset() {
+  const today = new Date().toLocaleDateString('es-MX');
+  localStorage.setItem('onichan_state', JSON.stringify({ date: today, done: [false,false,false,false,false] }));
+  const view = document.getElementById('article-view');
+  const main = document.getElementById('main-content');
+  const nav  = document.getElementById('nav-bar');
+  renderOnichan(view, main, nav);
+}
+// ===== FIN ONICHAN =====
+
+function toggleTheme() {
+  themeInverted = !themeInverted;
+  const body = document.body;
+  
+  if (themeInverted) {
+    body.style.backgroundColor = '#000000';
+    body.style.color = '#ffffff';
+  } else {
+    body.style.backgroundColor = 'var(--color-background-primary)';
+    body.style.color = 'var(--color-text-primary)';
+  }
+}
+</script>
+
+</body>
+</html>
