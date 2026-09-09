@@ -34,6 +34,9 @@
     <div style="cursor: pointer;" onclick="toggleSensConfig()">
       <span id="sens-label">Sens</span>
     </div>
+    <div style="cursor: pointer;" onclick="toggleMixUI()">
+      <span id="mix-label">Mix</span>
+    </div>
   </div>
   <div id="sens-config" style="display:none; margin-bottom:1rem; font-family:monospace;">
     <div style="margin-bottom:0.4rem;">
@@ -49,6 +52,23 @@
         onchange="clampRangeInputs()"></span>
     </div>
     <div style="font-size:0.85em;">Base sens: <input type="number" id="base-sens" step="0.001" value="0.184" onchange="localStorage.setItem('valofocus_base_sens', this.value)" style="width:60px;background:transparent;border:none;border-bottom:1px solid currentColor;color:inherit;font:inherit;outline:none;text-align:center;"> × multiplier</div>
+  </div>
+  <div id="mix-config" style="display:none; margin-bottom:1rem; font-family:monospace;">
+    <div style="font-size:0.78rem; opacity:0.55; margin-bottom:0.6rem; max-width:420px;">Generates a varied DM / TDM order for the session, without repeating the same type too many times in a row.</div>
+    <div style="margin-bottom:0.5rem;">
+      <span>DM: <input type="number" id="mix-dm" min="0" value="5"
+        style="width:44px;background:transparent;border:none;border-bottom:1px solid currentColor;color:inherit;font:inherit;outline:none;text-align:center;"></span>
+      &nbsp;&nbsp;
+      <span>TDM: <input type="number" id="mix-tdm" min="0" value="5"
+        style="width:44px;background:transparent;border:none;border-bottom:1px solid currentColor;color:inherit;font:inherit;outline:none;text-align:center;"></span>
+      &nbsp;&nbsp;
+      <span>Max in a row: <input type="number" id="mix-max" min="1" value="2"
+        style="width:40px;background:transparent;border:none;border-bottom:1px solid currentColor;color:inherit;font:inherit;outline:none;text-align:center;"></span>
+    </div>
+    <div>
+      <span onclick="generarMix()" style="cursor:pointer;">[ generate ]</span>
+    </div>
+    <div id="mix-result" style="display:none; white-space: pre-wrap; margin-top:0.8rem; padding: 1rem; border: 1px solid var(--color-border-tertiary);"></div>
   </div>
   <div id="weapon-selector" style="display: none; margin-bottom: 1.5rem; flex-wrap: wrap; gap: 0.5rem 1rem;"></div>
   <div id="stats-container" style="display:none; margin-bottom: 1.5rem;"></div>
@@ -287,6 +307,88 @@ function clampRangeInputs() {
   if (mn > mx) mx = mn;
   document.getElementById('sens-min').value = mn;
   document.getElementById('sens-max').value = mx;
+}
+
+function toggleMixUI() {
+  const cfg = document.getElementById('mix-config');
+  const lbl = document.getElementById('mix-label');
+  if (cfg.style.display === 'none') {
+    cfg.style.display = 'block';
+    lbl.textContent = 'Mix [config]';
+  } else {
+    cfg.style.display = 'none';
+    lbl.textContent = 'Mix';
+  }
+}
+
+function intentarSecuencia(dmTotal, tdmTotal, max) {
+  let dm = dmTotal, tdm = tdmTotal;
+  const secuencia = [];
+  let anterior = '';
+  let repeticiones = 0;
+
+  while (dm > 0 || tdm > 0) {
+    const opciones = [];
+    if (dm > 0 && (anterior !== 'DM' || repeticiones < max)) opciones.push('DM');
+    if (tdm > 0 && (anterior !== 'TDM' || repeticiones < max)) opciones.push('TDM');
+
+    if (opciones.length === 0) return null;
+
+    const tipo = opciones[Math.floor(Math.random() * opciones.length)];
+
+    if (tipo === anterior) {
+      repeticiones++;
+    } else {
+      anterior = tipo;
+      repeticiones = 1;
+    }
+
+    secuencia.push(tipo);
+    if (tipo === 'DM') dm--; else tdm--;
+  }
+  return secuencia;
+}
+
+function generarMix() {
+  const dmInput = document.getElementById('mix-dm');
+  const tdmInput = document.getElementById('mix-tdm');
+  if (Number(dmInput.value) > 200) dmInput.value = 200;
+  if (Number(tdmInput.value) > 200) tdmInput.value = 200;
+
+  const dmTotal = Math.max(0, Math.floor(Number(dmInput.value) || 0));
+  const tdmTotal = Math.max(0, Math.floor(Number(tdmInput.value) || 0));
+  const max = Math.max(1, Math.floor(Number(document.getElementById('mix-max').value) || 1));
+
+  const box = document.getElementById('mix-result');
+  box.style.display = 'block';
+
+  if (dmTotal + tdmTotal === 0) {
+    box.innerHTML = '<span style="opacity:0.6;">Set at least one DM or TDM.</span>';
+    return;
+  }
+
+  // The order is randomized and can occasionally paint itself into a corner
+  // even when a valid sequence exists, so it retries a few times before giving up.
+  let secuencia = null;
+  for (let intento = 0; intento < 500 && secuencia === null; intento++) {
+    secuencia = intentarSecuencia(dmTotal, tdmTotal, max);
+  }
+
+  if (secuencia === null) {
+    box.innerHTML = '<span style="opacity:0.6;">Can\'t generate a sequence with those values. Raise max-in-a-row or change the counts.</span>';
+    return;
+  }
+
+  const tokens = secuencia.map(t =>
+    `<span style="color:${t === 'DM' ? '#5b9bd5' : '#e05252'};">${t}</span>`
+  ).join(' &middot; ');
+
+  box.innerHTML =
+    `<div style="font-size:0.78rem; opacity:0.5; margin-bottom:0.5rem;">SEQUENCE (${secuencia.length})</div>` +
+    `<div>${tokens}</div>` +
+    `<div style="font-size:0.78rem; opacity:0.5; margin-top:0.7rem;">` +
+    `<span style="color:#5b9bd5;">${dmTotal} DM</span> &middot; <span style="color:#e05252;">${tdmTotal} TDM</span> &middot; max ${max} in a row` +
+    `</div>`;
 }
 
 function generate() {
