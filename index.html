@@ -1075,16 +1075,17 @@ function toggleTheme() {
 // ===== TETRIS COACH =====
 // Zen-style Tetris trainer. After every placement the coach compares your move with
 // every possible drop of the same piece (and of the HOLD alternative), scored with the
-// El-Tetris / Dellacherie heuristic. If yours is clearly worse it pauses and explains why.
+// El-Tetris / Dellacherie heuristic. If yours is clearly worse it freezes, shows the
+// better spot in green on the board, says the reason out loud and lets you retry.
 (function () {
 const COLS = 10, ROWS = 24, VISIBLE = 20, HIDDEN = ROWS - VISIBLE;
-const CELL = 22, SIDE = 5, GAP = 8, BUFFER = 2;
+const CELL = 22, SIDE = 5, GAP = 10, BUFFER = 2;
 const BX = SIDE * CELL + GAP, BY = BUFFER * CELL;
-const CW = BX + COLS * CELL + GAP + SIDE * CELL, CH = BY + VISIBLE * CELL;
-const GRAVITY_MS = 1000, LOCK_MS = 500, MAX_RESETS = 15;
+const CW = BX + COLS * CELL + GAP + SIDE * CELL, CH = BY + VISIBLE * CELL + 20;
+const GRAVITY_MS = 1000, LOCK_MS = 500, MAX_RESETS = 15, REVIEW_GUARD_MS = 600;
+const GREEN = '#5cb85c', RED = '#d9534f';
 
 const COLORS = { I:'#3ac9b0', O:'#e8c53a', T:'#b63ac2', S:'#8fc23a', Z:'#e0413c', J:'#5a4ad4', L:'#e88a3a' };
-const NAMES = { I:'I (celeste)', O:'O (amarilla)', T:'T (morada)', S:'S (verde)', Z:'Z (roja)', J:'J (azul)', L:'L (naranja)' };
 const BASE = {
   I: [[0,0,0,0],[1,1,1,1],[0,0,0,0],[0,0,0,0]],
   O: [[1,1],[1,1]],
@@ -1125,37 +1126,29 @@ const KICKS_180 = [[0,0],[0,1],[1,0],[-1,0],[1,1],[-1,1]];
 const W = { lh: -4.500158825082766, lines: 3.4181268101392694, rowT: -3.2178882868487753,
             colT: -9.348695305445199, holes: -7.899265427351652, wells: -3.3855972247263626 };
 const LEVELS = { estricto: 1, normal: 6, relajado: 15 };
-const LEVEL_TXT = {
-  estricto: 'te frena con cualquier diferencia',
-  normal: 'te frena con errores claros (agujeros, 2+ filas de más, pozos)',
-  relajado: 'solo te frena con errores graves (agujeros)'
-};
+const LEVEL_TXT = { estricto: 'cualquier diferencia', normal: 'errores claros', relajado: 'solo agujeros' };
 const HOLD_MARGIN = 5;
 
-const ROT_TXT = {
-  default: ['sin girar', 'girada a la derecha', 'girada 180°', 'girada a la izquierda'],
-  I: ['acostada', 'de pie', 'acostada', 'de pie'],
-  S: ['acostada', 'de pie', 'acostada', 'de pie'],
-  Z: ['acostada', 'de pie', 'acostada', 'de pie'],
-  O: ['tal cual', 'tal cual', 'tal cual', 'tal cual']
-};
-const ROT_KEYS = ['', '↑', 'A', 'Z'];
-
-const TIPS = {
-  I: 'La I es tu comodín: acostada sobre una superficie plana de 4, o de pie para rellenar un pozo profundo. De pie sobre suelo plano crea una torre: evítalo.',
-  O: 'La O solo encaja en un tramo plano de 2 de ancho. Sobre un escalón siempre deja un agujero debajo.',
-  T: 'La T es la más flexible: plana sobre suelo liso de 3, con la punta hacia abajo para tapar un hueco de 1, o de pie cuando un lado está 1 más alto. Nunca la dejes con la punta arriba sobre un hueco.',
-  S: 'La S no deja agujeros en 2 casos: acostada cuando la columna de la derecha está 1 más alta (▁▁▔), o de pie cuando la columna de la izquierda está 1 más alta (▔▁). En suelo plano SIEMPRE deja agujero: si no hay sitio, ponla de pie contra una pared o guárdala con HOLD.',
-  Z: 'La Z no deja agujeros en 2 casos: acostada cuando la columna de la izquierda está 1 más alta (▔▁▁), o de pie cuando la de la derecha está 1 más alta (▁▔). En suelo plano SIEMPRE deja agujero: si no hay sitio, ponla de pie contra una pared o guárdala con HOLD.',
-  L: 'La L encaja: plana sobre suelo liso de 3; con el gancho abajo a la izquierda si esa columna está 1 más baja; de pie con el pie a la derecha sobre suelo liso de 2; o de pie con gancho arriba a la izquierda si la izquierda está 2 más alta. Muy buena para pozos de 2 junto a la pared.',
-  J: 'La J encaja: plana sobre suelo liso de 3; con el gancho abajo a la derecha si esa columna está 1 más baja; de pie con el pie a la izquierda sobre suelo liso de 2; o de pie con gancho arriba a la derecha si la derecha está 2 más alta. Muy buena para pozos de 2 junto a la pared.'
+// tag = drawn on the board, say = spoken
+const REASONS = {
+  newHoles: { tag: '× agujero',   say: 'Agujero' },
+  freeHole: { tag: '× agujero',   say: 'Ahí liberabas un agujero' },
+  buried:   { tag: '× agujero',   say: 'Agujero' },
+  high:     { tag: '↑ muy alto',  say: 'Muy alto' },
+  standing: { tag: '▬ acuéstala', say: 'Acuéstala' },
+  lines:    { tag: '— línea',     say: 'Ahí hacías línea' },
+  rows:     { tag: '~ dispareja', say: 'Quedó disparejo' },
+  well:     { tag: '▼ pozo',      say: 'Pozo' },
+  hold:     { tag: '↔ hold',      say: 'Usa hold' },
+  noHold:   { tag: '↔ sin hold',  say: 'No era hold' },
+  better:   { tag: '× había mejor', say: 'Había una mejor' }
 };
 
-const DEFAULTS = { coach: true, level: 'normal', hint: false, das: 133, arr: 33, sdf: 20 };
+const DEFAULTS = { coach: true, level: 'normal', hint: false, voice: true, das: 133, arr: 33, sdf: 20 };
 let settings = Object.assign({}, DEFAULTS, JSON.parse(localStorage.getItem('tetris_coach_settings') || '{}'));
 function saveSettings() { localStorage.setItem('tetris_coach_settings', JSON.stringify(settings)); }
 
-let board, queue, hold, cur, holdUsed, turnType, history, mode = 'play', pending = null, hint = null;
+let board, queue, hold, cur, holdUsed, turnType, history, mode = 'play', pending = null, hint = null, target = null;
 let lastFeedback = null, flash = null;
 let stats = { placed: 0, good: 0, mistakes: 0, streak: 0, lines: 0,
               bestStreak: parseInt(localStorage.getItem('tetris_coach_best') || '0', 10) };
@@ -1189,9 +1182,6 @@ function analyze(b, type, cells) {
   for (let r = 0; r < ROWS; r++) (pre[r].every(v => v) ? full : kept).push(r);
   const res = full.map(() => Array(COLS).fill(0)).concat(kept.map(r => pre[r]));
 
-  const heights = [];
-  for (let c = 0; c < COLS; c++) { let r = 0; while (r < ROWS && !res[r][c]) r++; heights.push(ROWS - r); }
-
   // holes, mapped back to pre-clear rows so they can be drawn; "new" = was not covered before
   const holeCells = [];
   for (let c = 0; c < COLS; c++) {
@@ -1221,25 +1211,21 @@ function analyze(b, type, cells) {
   }
 
   let wells = 0;
-  const wellList = [];
   for (let c = 0; c < COLS; c++) {
-    let depth = 0, maxDepth = 0;
+    let depth = 0;
     for (let r = 0; r < ROWS; r++) {
       if (res[r][c]) break; // cells below the surface are holes, not wells
       const left = c === 0 || res[r][c - 1], right = c === COLS - 1 || res[r][c + 1];
-      if (!res[r][c] && left && right) { depth++; wells += depth; maxDepth = Math.max(maxDepth, depth); }
+      if (left && right) { depth++; wells += depth; }
       else depth = 0;
     }
-    if (maxDepth) wellList.push({ c, depth: maxDepth });
   }
 
-  let bump = 0;
-  for (let c = 0; c < COLS - 1; c++) bump += Math.abs(heights[c] - heights[c + 1]);
   const rows = cells.map(([r]) => r);
   const minR = Math.min(...rows), maxR = Math.max(...rows);
   const a = {
     lines: full.length, full, holes: holeCells.length, newHoles: holeCells.filter(h => h.isNew).length, holeCells,
-    rowT, colT, wells, wellList, bump, lh: ROWS - (minR + maxR) / 2, landRow: ROWS - maxR
+    rowT, colT, wells, lh: ROWS - (minR + maxR) / 2, landRow: ROWS - maxR
   };
   a.score = W.lh * a.lh + W.lines * a.lines + W.rowT * rowT + W.colT * colT + W.holes * a.holes + W.wells * wells;
   return a;
@@ -1265,95 +1251,69 @@ function bestPlacement(b, type) {
   return best;
 }
 
-// Why is `mine` worse than `best`? Returns reasons sorted by how much each one cost.
-function compare(mine, best) {
-  const items = [];
+// Why is `mine` worse than `best`? Reason keys sorted by how much each one cost.
+function reasons(mine, best) {
+  const out = [];
   const d = k => mine[k] - best[k];
-  const s = (n, one, many) => n + ' ' + (n === 1 ? one : many);
-
   const holeCost = W.holes * d('holes') + W.colT * d('colT');
-  if (holeCost < 0) {
-    let title, body;
-    if (mine.newHoles > best.newHoles) {
-      title = `creaste ${s(mine.newHoles, 'agujero', 'agujeros')}`;
-      body = `Un <b>agujero</b> es una casilla vacía con bloques encima (las <span style="color:#e0413c;">×</span> rojas en el tablero). No la puedes rellenar: primero tendrías que borrar todas las filas que la tapan. Esa fila queda bloqueada y el montón sigue subiendo. Es el error más caro de Tetris. La mejor jugada deja ${best.newHoles ? s(best.newHoles, 'agujero nuevo', 'agujeros nuevos') : '<b>cero</b> agujeros nuevos'}.`;
-    } else if (mine.holes > best.holes) {
-      title = 'la mejor jugada liberaba un agujero';
-      body = `La mejor jugada borra la(s) fila(s) que tapaban un agujero viejo, y así ese hueco vuelve a quedar abierto. Tu tablero se queda con ${s(mine.holes, 'agujero', 'agujeros')} y el de la mejor con ${best.holes}. Cuando tengas agujeros, prioriza borrar las filas que están <b>encima</b> de ellos.`;
-    } else {
-      title = 'tus agujeros quedan más enterrados';
-      body = 'Tienes la misma cantidad de agujeros, pero quedan repartidos en más columnas o bajo más bloques, así que cuesta más destaparlos. Intenta que los agujeros estén juntos y con poco encima.';
-    }
-    items.push({ cost: holeCost, title, body });
-  }
-
+  if (holeCost < 0) out.push({ cost: holeCost, key: mine.newHoles > best.newHoles ? 'newHoles' : mine.holes > best.holes ? 'freeHole' : 'buried' });
   const lhCost = W.lh * d('lh');
-  if (lhCost < 0) {
-    if (mine.landRow > best.landRow) {
-      items.push({ cost: lhCost, title: 'la colocaste más arriba',
-        body: `Tu pieza queda apoyada en la fila ${mine.landRow} y la mejor en la fila ${best.landRow} (contando desde abajo). Regla de oro: <b>cada pieza lo más abajo posible</b>. Cada fila de más es altura que luego tendrás que bajar, y te quita espacio para mover y girar las siguientes piezas.` });
-    } else {
-      items.push({ cost: lhCost, title: 'quedó de pie y sobresale',
-        body: `Las dos apoyan a la misma altura, pero tu pieza queda más vertical y sobresale hacia arriba. Acostar las piezas mantiene el montón bajo y plano, y deja más sitios donde encaja lo que viene.` });
-    }
-  }
-
+  if (lhCost < 0) out.push({ cost: lhCost, key: mine.landRow > best.landRow ? 'high' : 'standing' });
   const linesCost = W.lines * d('lines');
-  if (linesCost < 0) {
-    items.push({ cost: linesCost, title: `la mejor borraba ${s(best.lines, 'línea', 'líneas')}`,
-      body: `Tu jugada borra ${mine.lines}. Borrar líneas baja el montón y elimina filas casi llenas que estorban. Cuando una pieza completa una fila sin crear problemas, casi siempre es la jugada.` });
-  }
-
+  if (linesCost < 0) out.push({ cost: linesCost, key: 'lines' });
   const rowCost = W.rowT * d('rowT');
-  if (rowCost < 0) {
-    items.push({ cost: rowCost, title: 'filas más fragmentadas',
-      body: `Recorriendo cada fila de izquierda a derecha, tu tablero cambia entre lleno ↔ vacío ${mine.rowT} veces y el de la mejor ${best.rowT}. Cada cambio extra es un hueco suelto en medio de una fila que necesitará una pieza exacta para cerrarse. Busca que los espacios vacíos de cada fila queden <b>juntos</b>. Escalones en la superficie: ${mine.bump} tuya vs ${best.bump} la mejor (más plano = más piezas encajan).` });
-  }
-
+  if (rowCost < 0) out.push({ cost: rowCost, key: 'rows' });
   const wellCost = W.wells * d('wells');
-  if (wellCost < 0 && mine.wellList.length) {
-    const deep = mine.wellList.reduce((p, q) => (q.depth > p.depth ? q : p));
-    const bestDeep = best.wellList.reduce((m, q) => Math.max(m, q.depth), 0);
-    if (deep.depth >= 3) {
-      items.push({ cost: wellCost, title: `pozo de ${deep.depth} en la columna ${deep.c + 1}`,
-        body: `Un <b>pozo</b> es un hueco de 1 columna de ancho con paredes a los lados. Con 3 o más de profundidad <b>solo la I</b> lo puede llenar, y sale 1 de cada 7 piezas. Si no llega a tiempo tendrás que taparlo y se convierte en agujero. La mejor jugada deja pozos de ${bestDeep ? 'máximo ' + bestDeep : 'cero'}.` });
-    } else {
-      items.push({ cost: wellCost, title: `hueco estrecho en la columna ${deep.c + 1}`,
-        body: `Quedó un hueco de 1 de ancho y ${deep.depth} de profundo. Ahí solo encajan pocas piezas (I de pie, o L/J con la pata hacia abajo). Mientras menos huecos estrechos dejes, más opciones tendrás con cada pieza.` });
-    }
-  }
-
-  items.sort((p, q) => p.cost - q.cost);
-  return items;
+  if (wellCost < 0) out.push({ cost: wellCost, key: 'well' });
+  out.sort((p, q) => p.cost - q.cost);
+  return out.length ? out : [{ cost: 0, key: 'better' }];
 }
 
-function describeMove(piece) {
-  const t = piece.type;
-  const cols = cellsOf(piece).map(([, c]) => c);
-  const c1 = Math.min(...cols) + 1, c2 = Math.max(...cols) + 1;
-  const spawnMin = Math.min(...cellsOf({ ...spawnPiece(t), rot: piece.rot }).map(([, c]) => c));
-  const dx = (c1 - 1) - spawnMin;
-  const steps = [];
-  if (t !== 'O' && piece.rot) steps.push(ROT_KEYS[piece.rot]);
-  if (dx) steps.push((dx > 0 ? '→' : '←').repeat(Math.abs(dx)));
-  steps.push('Espacio');
-  const rotTxt = (ROT_TXT[t] || ROT_TXT.default)[piece.rot];
-  return { where: `${NAMES[t]} ${rotTxt}, ${c2 !== c1 ? `columnas ${c1}–${c2}` : `columna ${c1}`}`, keys: steps.join(' · ') };
+// "gírala, más a la izquierda" — how to get from your placement to the better one.
+function direction(p) {
+  const orient = (type, rot) => (type === 'O' ? 0 : 'ISZ'.includes(type) ? rot % 2 : rot);
+  const cx = cells => cells.reduce((s, [, c]) => s + c, 0) / cells.length;
+  const parts = [];
+  if (orient(p.type, p.rot) !== orient(p.best.piece.type, p.best.piece.rot)) parts.push('gírala');
+  const dx = cx(p.best.cells) - cx(p.cells);
+  if (dx <= -1) parts.push('más a la izquierda');
+  else if (dx >= 1) parts.push('más a la derecha');
+  return parts.join(', ');
 }
+
+// ---------- voice ----------
+let voice = null;
+function pickVoice() {
+  const vs = window.speechSynthesis.getVoices();
+  voice = vs.find(v => /^es[-_]MX/i.test(v.lang)) || vs.find(v => /^es/i.test(v.lang)) || null;
+}
+function say(text) {
+  if (!settings.voice || !('speechSynthesis' in window)) return;
+  try {
+    if (!voice) pickVoice();
+    window.speechSynthesis.cancel();
+    const u = new SpeechSynthesisUtterance(text);
+    u.lang = voice ? voice.lang : 'es-MX';
+    if (voice) u.voice = voice;
+    u.rate = 1.15;
+    window.speechSynthesis.speak(u);
+  } catch (e) { /* no speech on this browser */ }
+}
+if ('speechSynthesis' in window) window.speechSynthesis.addEventListener('voiceschanged', pickVoice);
 
 // ---------- game flow ----------
 function snapshot() { return { board: cloneBoard(board), queue: queue.slice(), hold, type: cur.type }; }
 function restore(s) {
   board = cloneBoard(s.board); queue = s.queue.slice(); hold = s.hold;
   cur = spawnPiece(s.type); holdUsed = false; turnType = s.type;
-  resetPieceTimers(); mode = 'play'; pending = null; updateHint(); renderCoach();
+  resetPieceTimers(); mode = 'play'; pending = null; target = null; updateHint(); renderCoach();
 }
 function resetPieceTimers() { lockStart = null; lockResets = 0; gravAcc = 0; }
 function updateHint() { hint = settings.hint ? bestPlacement(board, cur.type) : null; }
 
 function newGame() {
   board = emptyBoard(); queue = []; refill(); hold = null; history = [];
-  mode = 'play'; pending = null; lastFeedback = null;
+  mode = 'play'; pending = null; target = null; lastFeedback = null;
   nextTurn();
 }
 
@@ -1368,7 +1328,7 @@ function nextTurn() {
   renderCoach();
 }
 
-function topOut() { mode = 'topout'; renderCoach(); }
+function topOut() { mode = 'topout'; target = null; renderCoach(); }
 
 function undo() {
   if (mode === 'review') return retry();
@@ -1412,6 +1372,8 @@ function hardDrop() { cur = dropped(board, cur); lockPiece(); }
 function lockPiece() {
   const cells = cellsOf(cur);
   const mine = analyze(board, cur.type, cells);
+  const retried = !!target;
+  target = null;
   if (!settings.coach) return commit(cells, cur.type, null);
 
   const bestHere = bestPlacement(board, cur.type);
@@ -1425,17 +1387,20 @@ function lockPiece() {
   }
   const gap = bestHere.a.score - mine.score;
   if (gap > th) return startReview(cells, mine, bestHere, false);
-  commit(cells, cur.type, { gap: Math.max(0, gap), items: compare(mine, bestHere.a) });
+  commit(cells, cur.type, { gap: Math.max(0, gap), retried });
 }
 
 function startReview(cells, mine, best, viaHold) {
   mode = 'review';
-  pending = { cells, type: cur.type, mine, best, viaHold, holdUsed, at: performance.now() };
+  pending = { cells, type: cur.type, rot: cur.rot, mine, best, viaHold, holdUsed, at: performance.now() };
+  pending.why = viaHold ? [{ key: holdUsed ? 'noHold' : 'hold' }] : reasons(mine, best.a);
+  pending.dir = viaHold ? '' : direction(pending);
   stats.mistakes++; stats.streak = 0;
+  say(REASONS[pending.why[0].key].say + (pending.dir ? '. ' + pending.dir[0].toUpperCase() + pending.dir.slice(1) : ''));
   renderCoach();
 }
 
-// verdict: null = coach off / accepted mistake, otherwise { gap, items } for a good move
+// verdict: null = coach off / accepted mistake, otherwise { gap, retried } for a good move
 function commit(cells, type, verdict) {
   cells.forEach(([r, c]) => { board[r][c] = type; });
   const keep = board.filter(row => !row.every(v => v));
@@ -1446,16 +1411,12 @@ function commit(cells, type, verdict) {
   if (verdict) {
     stats.good++; stats.streak++;
     if (stats.streak > stats.bestStreak) { stats.bestStreak = stats.streak; localStorage.setItem('tetris_coach_best', stats.bestStreak); }
-    if (verdict.gap < 0.01) {
-      lastFeedback = '<span style="color:#5cb85c;">✓ perfecta</span> — igual a la mejor jugada posible.';
-      flash = { text: cleared === 4 ? 'TETRIS!' : '✓', color: '#5cb85c', t: now };
-    } else {
-      const why = verdict.items.length ? ` Detalle: ${verdict.items[0].title}.` : '';
-      lastFeedback = `<span style="color:#8fc23a;">✓ buena</span> — casi la mejor (−${verdict.gap.toFixed(1)}).${why}`;
-      flash = { text: cleared === 4 ? 'TETRIS!' : '✓', color: '#8fc23a', t: now };
-    }
+    const perfect = verdict.gap < 0.01;
+    lastFeedback = perfect ? `<span style="color:${GREEN};">✓ perfecta</span>` : `<span style="color:${GREEN};opacity:0.75;">✓ buena</span>`;
+    flash = { text: cleared === 4 ? 'TETRIS' : '✓', color: GREEN, t: now };
+    if (verdict.retried) say('Bien');
   } else if (cleared === 4) {
-    flash = { text: 'TETRIS!', color: '#3ac9b0', t: now };
+    flash = { text: 'TETRIS', color: COLORS.I, t: now };
   }
   if (cells.every(([r]) => r < HIDDEN)) return topOut();
   nextTurn();
@@ -1463,30 +1424,33 @@ function commit(cells, type, verdict) {
 
 function retry() {
   if (mode !== 'review') return;
-  lastFeedback = '<span style="opacity:0.6;">↻ otra vez — intenta la jugada marcada en verde, o una igual de limpia.</span>';
+  const p = pending;
   restore(history[history.length - 1]);
+  target = { cells: p.best.cells, viaHold: p.viaHold && !p.holdUsed };
+  lastFeedback = '<span style="opacity:0.6;">↻ ponla en el verde</span>';
+  renderCoach();
 }
 function continueAnyway() {
   if (mode !== 'review') return;
   const p = pending;
   mode = 'play'; pending = null;
-  lastFeedback = '<span style="opacity:0.6;">→ seguiste con tu jugada.</span>';
+  lastFeedback = '<span style="opacity:0.6;">→ seguiste</span>';
   commit(p.cells, p.type, null);
 }
 
 // ---------- input ----------
+const RETRY_KEYS = ['KeyR', 'ArrowLeft', 'ArrowRight', 'ArrowDown', 'ArrowUp', 'KeyX', 'KeyZ', 'KeyA', 'KeyC', 'ShiftLeft', 'ShiftRight'];
 function onKeyDown(e) {
   if (e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT')) return;
   const code = e.code;
-  const gameKey = ['ArrowLeft','ArrowRight','ArrowDown','ArrowUp','Space','KeyX','KeyZ','KeyA','KeyC','ShiftLeft','ShiftRight','Escape','Enter','KeyR'].includes(code);
-  if (gameKey) e.preventDefault();
+  if (RETRY_KEYS.includes(code) || ['Space', 'Escape', 'Enter'].includes(code)) e.preventDefault();
   if (e.ctrlKey && code === 'KeyZ') { undo(); return; }
   if (e.ctrlKey || e.metaKey || e.altKey) return;
 
   if (mode === 'review') {
-    if (performance.now() - pending.at < 700) return; // don't let a mashed key skip the explanation
-    if (code === 'KeyR') retry();
-    else if (code === 'Enter') continueAnyway();
+    if (performance.now() - pending.at < REVIEW_GUARD_MS) return; // a mashed key can't skip the feedback
+    if (code === 'Enter') continueAnyway();
+    else if (RETRY_KEYS.includes(code)) retry();
     return;
   }
   if (mode === 'topout') { if (code === 'Enter') newGame(); return; }
@@ -1545,30 +1509,44 @@ function frame(t) {
 }
 
 // ---------- drawing ----------
+// The canvas follows the page theme: lines and labels use the body's text color.
+function rgbOf(css, fallback) {
+  const m = (css || '').match(/[\d.]+/g);
+  if (!m || (m.length > 3 && +m[3] === 0)) return fallback;
+  return m.slice(0, 3).join(',');
+}
 function block(c, x, y, s, color, alpha) {
   c.globalAlpha = alpha == null ? 1 : alpha;
-  c.fillStyle = color; c.fillRect(x, y, s, s);
-  const e = Math.max(2, s * 0.14);
-  c.fillStyle = 'rgba(255,255,255,0.2)'; c.fillRect(x, y, s, e);
-  c.fillStyle = 'rgba(0,0,0,0.28)'; c.fillRect(x, y + s - e, s, e);
+  c.fillStyle = color; c.fillRect(x + 1, y + 1, s - 2, s - 2);
   c.globalAlpha = 1;
 }
-function outline(c, x, y, s, color, dashed) {
-  c.save(); c.strokeStyle = color; c.lineWidth = 2;
-  if (dashed) c.setLineDash([4, 3]);
-  c.strokeRect(x + 1.5, y + 1.5, s - 3, s - 3); c.restore();
+function outline(c, x, y, s, color, width) {
+  c.strokeStyle = color; c.lineWidth = width || 2;
+  c.strokeRect(x + 1.5, y + 1.5, s - 3, s - 3);
 }
 function cross(c, x, y, s, color) {
   const m = s * 0.25;
-  c.save(); c.strokeStyle = color; c.lineWidth = 2;
+  c.strokeStyle = color; c.lineWidth = 2.5;
   c.beginPath(); c.moveTo(x + m, y + m); c.lineTo(x + s - m, y + s - m); c.moveTo(x + s - m, y + m); c.lineTo(x + m, y + s - m); c.stroke();
-  c.restore();
+}
+function arrow(c, from, to, color) {
+  const dx = to[0] - from[0], dy = to[1] - from[1], len = Math.hypot(dx, dy);
+  if (len < CELL) return;
+  const ux = dx / len, uy = dy / len;
+  const x1 = from[0] + ux * 6, y1 = from[1] + uy * 6, x2 = to[0] - ux * 6, y2 = to[1] - uy * 6;
+  c.strokeStyle = color; c.fillStyle = color; c.lineWidth = 3;
+  c.beginPath(); c.moveTo(x1, y1); c.lineTo(x2, y2); c.stroke();
+  c.beginPath(); c.moveTo(x2 + ux * 4, y2 + uy * 4);
+  c.lineTo(x2 - ux * 9 - uy * 7, y2 - uy * 9 + ux * 7);
+  c.lineTo(x2 - ux * 9 + uy * 7, y2 - uy * 9 - ux * 7);
+  c.closePath(); c.fill();
 }
 function preview(c, type, cx, cy, s, alpha) {
   const cells = SHAPES[type][0];
   const rs = cells.map(([r]) => r), cs = cells.map(([, k]) => k);
-  const w = Math.max(...cs) - Math.min(...cs) + 1, h = Math.max(...rs) - Math.min(...rs) + 1;
-  cells.forEach(([r, k]) => block(c, cx - w * s / 2 + (k - Math.min(...cs)) * s, cy - h * s / 2 + (r - Math.min(...rs)) * s, s, COLORS[type], alpha));
+  const r0 = Math.min(...rs), c0 = Math.min(...cs);
+  const w = Math.max(...cs) - c0 + 1, h = Math.max(...rs) - r0 + 1;
+  cells.forEach(([r, k]) => block(c, cx - w * s / 2 + (k - c0) * s, cy - h * s / 2 + (r - r0) * s, s, COLORS[type], alpha));
 }
 function setupCanvas(canvas, w, h) {
   const dpr = window.devicePixelRatio || 1;
@@ -1581,72 +1559,68 @@ function setupCanvas(canvas, w, h) {
 
 function draw(t) {
   const c = ctx;
-  c.clearRect(0, 0, CW, CH);
+  const bodyStyle = getComputedStyle(document.body);
+  const fg = rgbOf(bodyStyle.color, '0,0,0'), bg = rgbOf(bodyStyle.backgroundColor, '255,255,255');
+  const ink = a => `rgba(${fg},${a})`, paper = a => `rgba(${bg},${a})`;
   const rowY = r => BY + (r - HIDDEN) * CELL, colX = k => BX + k * CELL;
+  const shown = ([r]) => r >= HIDDEN - BUFFER;
+  const center = cells => [BX + (cells.reduce((s, [, k]) => s + k, 0) / cells.length + 0.5) * CELL,
+                           BY + (cells.reduce((s, [r]) => s + r, 0) / cells.length - HIDDEN + 0.5) * CELL];
+  const pulse = 0.5 + 0.5 * Math.sin(t / 150);
+  const mid = BX + COLS * CELL / 2, bottom = BY + VISIBLE * CELL;
+  const holdBox = a => { c.strokeStyle = `rgba(92,184,92,${a})`; c.lineWidth = 2; c.strokeRect(1, BY - 4, SIDE * CELL - 6, 3.6 * CELL); };
+  c.clearRect(0, 0, CW, CH);
 
-  // field
-  c.fillStyle = '#0e0e10'; c.fillRect(BX, BY, COLS * CELL, VISIBLE * CELL);
-  c.strokeStyle = '#1f1f24'; c.lineWidth = 1;
-  for (let k = 1; k < COLS; k++) { c.beginPath(); c.moveTo(colX(k) + 0.5, BY); c.lineTo(colX(k) + 0.5, CH); c.stroke(); }
-  for (let r = 1; r < VISIBLE; r++) { c.beginPath(); c.moveTo(BX, BY + r * CELL + 0.5); c.lineTo(BX + COLS * CELL, BY + r * CELL + 0.5); c.stroke(); }
-  c.strokeStyle = '#888'; c.strokeRect(BX - 0.5, BY - 0.5, COLS * CELL + 1, VISIBLE * CELL + 1);
+  // field: dot grid + open-top well
+  c.fillStyle = ink(0.12);
+  for (let k = 1; k < COLS; k++) for (let r = 1; r < VISIBLE; r++) c.fillRect(colX(k) - 1, BY + r * CELL - 1, 2, 2);
+  c.strokeStyle = ink(0.5); c.lineWidth = 1;
+  c.beginPath(); c.moveTo(BX - 0.5, BY); c.lineTo(BX - 0.5, bottom + 0.5); c.lineTo(BX + COLS * CELL + 0.5, bottom + 0.5); c.lineTo(BX + COLS * CELL + 0.5, BY); c.stroke();
 
   for (let r = HIDDEN - BUFFER; r < ROWS; r++)
-    for (let k = 0; k < COLS; k++) if (board[r][k]) block(c, colX(k), rowY(r), CELL, COLORS[board[r][k]], 0.92);
+    for (let k = 0; k < COLS; k++) if (board[r][k]) block(c, colX(k), rowY(r), CELL, COLORS[board[r][k]]);
 
+  c.textAlign = 'center'; c.textBaseline = 'middle';
   if (mode === 'review') {
     const p = pending;
-    p.cells.forEach(([r, k]) => { if (r >= HIDDEN - BUFFER) { block(c, colX(k), rowY(r), CELL, COLORS[p.type]); outline(c, colX(k), rowY(r), CELL, '#ff4d4d'); } });
-    p.best.cells.forEach(([r, k]) => { if (r >= HIDDEN - BUFFER) outline(c, colX(k), rowY(r), CELL, '#5cff7a', true); });
-    p.mine.holeCells.forEach(h => { if (h.isNew) cross(c, colX(h.c), rowY(h.r), CELL, '#ff4d4d'); });
+    p.cells.filter(shown).forEach(([r, k]) => block(c, colX(k), rowY(r), CELL, RED, 0.3 + 0.55 * pulse));
+    p.best.cells.filter(shown).forEach(([r, k]) => { block(c, colX(k), rowY(r), CELL, GREEN, 0.2 + 0.35 * (1 - pulse)); outline(c, colX(k), rowY(r), CELL, GREEN); });
+    p.mine.holeCells.forEach(h => { if (h.isNew && h.r >= HIDDEN - BUFFER) cross(c, colX(h.c), rowY(h.r), CELL, RED); });
+    if (p.viaHold) holdBox(0.4 + 0.6 * pulse);
+    else arrow(c, center(p.cells), center(p.best.cells), GREEN);
+    c.font = 'bold 16px monospace'; c.fillStyle = RED;
+    c.fillText(REASONS[p.why[0].key].tag, mid, BY - CELL);
+    c.font = '11px monospace'; c.fillStyle = ink(0.55);
+    c.fillText('R otra vez · Enter seguir', mid, bottom + 11);
   } else if (cur) {
-    if (hint && mode === 'play') hint.cells.forEach(([r, k]) => { if (r >= HIDDEN - BUFFER) outline(c, colX(k), rowY(r), CELL, '#5cff7a', true); });
-    cellsOf(dropped(board, cur)).forEach(([r, k]) => { if (r >= HIDDEN - BUFFER) block(c, colX(k), rowY(r), CELL, COLORS[cur.type], 0.22); });
-    cellsOf(cur).forEach(([r, k]) => { if (r >= HIDDEN - BUFFER) block(c, colX(k), rowY(r), CELL, COLORS[cur.type]); });
+    const goal = target ? target.cells : hint && mode === 'play' ? hint.cells : null;
+    if (goal) goal.filter(shown).forEach(([r, k]) => { block(c, colX(k), rowY(r), CELL, GREEN, 0.18); outline(c, colX(k), rowY(r), CELL, GREEN, 1.5); });
+    if (target && target.viaHold && !holdUsed) holdBox(0.4 + 0.6 * pulse);
+    cellsOf(dropped(board, cur)).filter(shown).forEach(([r, k]) => outline(c, colX(k), rowY(r), CELL, COLORS[cur.type], 1.5));
+    cellsOf(cur).filter(shown).forEach(([r, k]) => block(c, colX(k), rowY(r), CELL, COLORS[cur.type]));
   }
 
   // hold & next
-  c.fillStyle = '#ddd'; c.font = 'bold 13px monospace'; c.textBaseline = 'top';
-  c.fillStyle = '#0e0e10'; c.fillRect(0, BY, SIDE * CELL, 3.6 * CELL); c.fillRect(BX + COLS * CELL + GAP, BY, SIDE * CELL, 15.6 * CELL);
-  c.fillStyle = '#ccc';
-  c.fillText('HOLD', 6, BY + 5);
-  c.fillText('NEXT', BX + COLS * CELL + GAP + 6, BY + 5);
-  const ps = CELL * 0.8;
-  if (hold) preview(c, hold, SIDE * CELL / 2, BY + 2.2 * CELL, ps, holdUsed ? 0.35 : 1);
-  queue.slice(0, 5).forEach((tp, i) => preview(c, tp, BX + COLS * CELL + GAP + SIDE * CELL / 2, BY + 2.3 * CELL + i * 2.85 * CELL, ps));
+  c.textAlign = 'left'; c.textBaseline = 'top'; c.font = '12px monospace'; c.fillStyle = ink(0.5);
+  c.fillText('hold', 4, BY);
+  c.fillText('next', BX + COLS * CELL + GAP + 4, BY);
+  const ps = CELL * 0.75;
+  if (hold) preview(c, hold, SIDE * CELL / 2, BY + 2 * CELL, ps, holdUsed ? 0.3 : 1);
+  queue.slice(0, 5).forEach((tp, i) => preview(c, tp, BX + COLS * CELL + GAP + SIDE * CELL / 2, BY + 2 * CELL + i * 2.6 * CELL, ps));
 
   // overlays
-  c.textAlign = 'center';
-  const mid = BX + COLS * CELL / 2;
-  if (mode === 'review' || mode === 'paused' || mode === 'topout') {
-    if (mode === 'review') {
-      c.fillStyle = '#ff4d4d'; c.font = 'bold 13px monospace';
-      c.fillText('⏸ REVISA LA EXPLICACIÓN', mid, 14);
-    } else {
-      c.fillStyle = 'rgba(0,0,0,0.6)'; c.fillRect(BX, BY, COLS * CELL, VISIBLE * CELL);
-      c.fillStyle = '#eee'; c.font = 'bold 16px monospace';
-      c.fillText(mode === 'paused' ? 'PAUSA · Esc' : 'TOPE · Enter', mid, BY + VISIBLE * CELL / 2 - 8);
-    }
+  c.textAlign = 'center'; c.textBaseline = 'middle';
+  if (mode === 'paused' || mode === 'topout') {
+    c.fillStyle = paper(0.8); c.fillRect(BX, BY, COLS * CELL, VISIBLE * CELL);
+    c.fillStyle = ink(0.9); c.font = 'bold 15px monospace';
+    c.fillText(mode === 'paused' ? 'pausa · Esc' : 'tope · Enter', mid, BY + VISIBLE * CELL / 2);
   }
   if (flash && t - flash.t < 700) {
     c.globalAlpha = 1 - (t - flash.t) / 700;
-    c.fillStyle = flash.color; c.font = 'bold 26px monospace';
+    c.fillStyle = flash.color; c.font = 'bold 28px monospace';
     c.fillText(flash.text, mid, BY + 3 * CELL);
     c.globalAlpha = 1;
   }
-  c.textAlign = 'left';
-}
-
-// Mini board showing a placement before its lines are cleared.
-function drawMini(canvas, b, type, cells, a, top) {
-  const S = 13, rows = ROWS - top;
-  const c = setupCanvas(canvas, COLS * S, rows * S);
-  c.fillStyle = '#0e0e10'; c.fillRect(0, 0, COLS * S, rows * S);
-  for (let r = top; r < ROWS; r++) for (let k = 0; k < COLS; k++) if (b[r][k]) block(c, k * S, (r - top) * S, S, COLORS[b[r][k]], 0.5);
-  cells.forEach(([r, k]) => { if (r >= top) { block(c, k * S, (r - top) * S, S, COLORS[type]); outline(c, k * S, (r - top) * S, S, '#fff'); } });
-  a.full.forEach(r => { if (r >= top) { c.fillStyle = 'rgba(255,255,255,0.22)'; c.fillRect(0, (r - top) * S, COLS * S, S); } });
-  a.holeCells.forEach(h => { if (h.r >= top) cross(c, h.c * S, (h.r - top) * S, S, h.isNew ? '#ff4d4d' : '#777'); });
-  c.strokeStyle = '#888'; c.lineWidth = 1; c.strokeRect(0.5, 0.5, COLS * S - 1, rows * S - 1);
 }
 
 // ---------- panel ----------
@@ -1656,81 +1630,43 @@ const btn = (id, label, extra) => `<span id="${id}" style="cursor:pointer;${extr
 function renderStats() {
   const tried = stats.good + stats.mistakes;
   const acc = tried ? Math.round(100 * stats.good / tried) + '%' : '—';
-  $('tt-stats').innerHTML = `jugadas ${stats.placed} · buenas ${stats.good} · errores ${stats.mistakes} · líneas ${stats.lines}<br>racha ${stats.streak} (récord ${stats.bestStreak}) · precisión ${acc}`;
+  $('tt-stats').textContent = `racha ${stats.streak} · récord ${stats.bestStreak} · precisión ${acc} · líneas ${stats.lines}`;
 }
 
 function renderCoach() {
   if (!$('tt-coach')) return;
   renderStats();
   const box = $('tt-coach');
-  if (mode === 'review') return renderReview(box);
-  if (mode === 'topout') {
-    box.innerHTML = `<div style="color:#e0413c;font-weight:bold;">TE LLENASTE HASTA ARRIBA</div>
-<div style="margin-top:0.4rem;">Es modo zen: no pasa nada. Pulsa <b>Enter</b> para limpiar el tablero y seguir, o <b>Ctrl+Z</b> para deshacer la última pieza.</div>
-<div style="margin-top:0.4rem;opacity:0.7;">Si llegaste aquí es que el montón creció más rápido de lo que lo bajaste: prioriza borrar líneas y no dejar agujeros.</div>`;
+  if (mode === 'review') {
+    const p = pending;
+    const tags = p.why.slice(0, 2).map(w => REASONS[w.key].tag).join(' · ');
+    box.innerHTML = `<span style="color:${RED};">${tags}</span>${p.dir ? `<span style="opacity:0.6;"> · ${p.dir}</span>` : ''}
+<div style="margin-top:0.4rem;display:flex;gap:1.2rem;flex-wrap:wrap;">${btn('tt-retry', 'R otra vez')}${btn('tt-continue', 'Enter seguir', 'opacity:0.6;')}</div>`;
+    $('tt-retry').onclick = retry;
+    $('tt-continue').onclick = continueAnyway;
     return;
   }
-  if (mode === 'paused') { box.innerHTML = '<div>PAUSA — <b>Esc</b> o <b>Enter</b> para seguir.</div>'; return; }
-  box.innerHTML = lastFeedback
-    ? `<div>${lastFeedback}</div>`
-    : `<div style="opacity:0.75;">Juega normal. Cada vez que sueltes una pieza el coach la compara con todas las posiciones posibles. Si había una claramente mejor, se detiene y te explica por qué.</div>`;
-}
-
-function renderReview(box) {
-  const p = pending, a = p.mine, b = p.best.a;
-  const items = compare(a, b);
-  if (p.viaHold) {
-    const other = p.best.piece.type;
-    items.unshift(p.holdUsed
-      ? { title: 'era mejor no usar HOLD',
-          body: `Guardaste la ${NAMES[other]}, pero ella tenía un sitio mejor que la ${NAMES[p.type]} que jugaste. Antes de usar HOLD compara: ¿dónde iría cada una?` }
-      : { title: 'era mejor guardar esta pieza (HOLD)',
-          body: `La ${NAMES[p.type]} no tenía un buen sitio en este tablero. Con <b>C</b> o <b>Shift</b> la guardas y juegas la ${NAMES[other]}, que sí encaja limpio. Para eso sirve HOLD: apartar la pieza que ahora estorba y usarla cuando haya un hueco hecho para ella.` });
-  }
-  const mv = describeMove(p.best.piece);
-  const holdKey = p.viaHold ? (p.holdUsed ? 'sin HOLD · ' : 'C (hold) · ') : '';
-  const top = Math.max(HIDDEN, Math.min(ROWS - 8,
-    ...p.cells.map(([r]) => r - 2), ...p.best.cells.map(([r]) => r - 2),
-    ...board.map((row, r) => (row.some(v => v) ? r - 2 : ROWS))));
-  const gap = (b.score - a.score).toFixed(1);
-
-  box.innerHTML = `<div style="color:#ff4d4d;font-weight:bold;letter-spacing:0.04em;">⏸ HABÍA UNA JUGADA MEJOR</div>
-<div style="opacity:0.6;font-size:0.8rem;margin-bottom:0.7rem;">pérdida de calidad: ${gap} (tu límite en "${settings.level}": ${LEVELS[settings.level]})</div>
-<div style="display:flex;gap:1rem;flex-wrap:wrap;margin-bottom:0.8rem;">
-  <div><div style="font-size:0.78rem;color:#ff4d4d;margin-bottom:0.2rem;">TU JUGADA</div><canvas id="tt-mini-mine"></canvas></div>
-  <div><div style="font-size:0.78rem;color:#5cff7a;margin-bottom:0.2rem;">MEJOR JUGADA</div><canvas id="tt-mini-best"></canvas></div>
-</div>
-<div style="font-size:0.78rem;opacity:0.6;margin-bottom:0.8rem;">pieza resaltada = dónde cae · franja clara = línea que se borra · <span style="color:#ff4d4d;">×</span> agujero nuevo · <span style="color:#999;">×</span> agujero viejo</div>
-<div style="margin-bottom:0.8rem;"><b>Mejor:</b> ${p.viaHold && !p.holdUsed ? 'guardar con HOLD y poner la ' : ''}${mv.where}, apoyada en la fila ${b.landRow}.<br><span style="opacity:0.7;">Teclas desde que aparece: ${holdKey}${mv.keys}</span></div>
-<div style="font-weight:bold;margin-bottom:0.3rem;">Por qué:</div>
-${items.map((it, i) => `<div style="margin-bottom:0.6rem;"><b>${i + 1}. ${it.title[0].toUpperCase() + it.title.slice(1)}.</b> ${it.body}</div>`).join('') || '<div style="margin-bottom:0.6rem;">Varias diferencias pequeñas que juntas suman: compara los dos tableros de arriba.</div>'}
-${a.lines > b.lines ? `<div style="margin-bottom:0.6rem;opacity:0.85;">Ojo: tu jugada sí borra ${a.lines} línea(s), pero lo que cuesta pesa más que lo que ganas.</div>` : ''}
-<div style="margin:0.8rem 0;padding:0.6rem;border:1px solid rgba(128,128,128,0.35);font-size:0.85rem;"><b>Tip de la ${NAMES[p.type]}:</b> ${TIPS[p.type]}</div>
-<div style="display:flex;gap:1.2rem;flex-wrap:wrap;">${btn('tt-retry', 'R · reintentar')}${btn('tt-continue', 'Enter · seguir así', 'opacity:0.7;')}</div>
-<div style="font-size:0.78rem;opacity:0.5;margin-top:0.4rem;">Reintentar es lo que más enseña: vuelve a colocarla tú mismo (en el tablero está marcada en verde).</div>`;
-
-  drawMini($('tt-mini-mine'), board, p.type, p.cells, a, top);
-  drawMini($('tt-mini-best'), board, p.best.piece.type, p.best.cells, b, top);
-  $('tt-retry').onclick = retry;
-  $('tt-continue').onclick = continueAnyway;
+  if (mode === 'topout') { box.innerHTML = `<span style="color:${RED};">tope</span><span style="opacity:0.6;"> · Enter limpia · Ctrl+Z deshace</span>`; return; }
+  if (mode === 'paused') { box.innerHTML = '<span style="opacity:0.6;">pausa · Esc sigue</span>'; return; }
+  box.innerHTML = lastFeedback || '<span style="opacity:0.45;">si hay una jugada mejor, te frena</span>';
 }
 
 function renderSettings() {
   const on = v => (v ? '[ON]' : '[OFF]');
-  const num = (id, v) => `<input type="number" id="${id}" min="0" max="500" value="${v}" style="width:44px;background:transparent;border:none;border-bottom:1px solid currentColor;color:inherit;font:inherit;outline:none;text-align:center;">`;
+  const num = (id, v) => `<input type="number" id="${id}" min="0" max="500" value="${v}" style="width:46px;background:transparent;border:none;border-bottom:1px solid currentColor;color:inherit;font:inherit;outline:none;text-align:center;">`;
   $('tt-settings').innerHTML = `<div>coach <span id="tt-s-coach" style="cursor:pointer;">${on(settings.coach)}</span>
- · nivel <span id="tt-s-level" style="cursor:pointer;">[${settings.level}]</span>
+ · voz <span id="tt-s-voice" style="cursor:pointer;">${on(settings.voice)}</span>
  · pista <span id="tt-s-hint" style="cursor:pointer;">${on(settings.hint)}</span></div>
-<div style="font-size:0.78rem;opacity:0.55;margin:0.2rem 0 0.5rem;">${settings.level}: ${LEVEL_TXT[settings.level]}${settings.hint ? ' · pista: la mejor posición se marca en verde mientras juegas' : ''}</div>
-<div style="font-size:0.85rem;">DAS ${num('tt-das', settings.das)} ms · ARR ${num('tt-arr', settings.arr)} ms · caída suave ${num('tt-sdf', settings.sdf)} ms</div>
-<div style="font-size:0.75rem;opacity:0.45;margin-top:0.2rem;">DAS = espera antes de que la pieza corra sola · ARR = velocidad al correr (0 = instantáneo)</div>`;
+<div>nivel <span id="tt-s-level" style="cursor:pointer;">[${settings.level}]</span> <span style="opacity:0.45;font-size:0.8rem;">${LEVEL_TXT[settings.level]}</span></div>
+<div style="font-size:0.85rem;margin-top:0.3rem;opacity:0.8;">das ${num('tt-das', settings.das)} arr ${num('tt-arr', settings.arr)} caída ${num('tt-sdf', settings.sdf)} ms</div>`;
   $('tt-s-coach').onclick = () => { settings.coach = !settings.coach; saveSettings(); renderSettings(); };
+  $('tt-s-voice').onclick = () => { settings.voice = !settings.voice; saveSettings(); renderSettings(); say('Listo'); };
+  $('tt-s-hint').onclick = () => { settings.hint = !settings.hint; saveSettings(); updateHint(); renderSettings(); };
   $('tt-s-level').onclick = () => {
     const order = Object.keys(LEVELS);
     settings.level = order[(order.indexOf(settings.level) + 1) % order.length];
     saveSettings(); renderSettings();
   };
-  $('tt-s-hint').onclick = () => { settings.hint = !settings.hint; saveSettings(); updateHint(); renderSettings(); };
   [['tt-das', 'das'], ['tt-arr', 'arr'], ['tt-sdf', 'sdf']].forEach(([id, key]) => {
     $(id).onchange = e => {
       settings[key] = Math.max(0, Math.min(500, parseInt(e.target.value, 10) || 0));
@@ -1742,35 +1678,29 @@ function renderSettings() {
 function buildView(view) {
   view.innerHTML = `<div style="display:flex;gap:1.5rem;flex-wrap:wrap;align-items:flex-start;">
   <canvas id="tt-canvas"></canvas>
-  <div style="flex:1;min-width:280px;max-width:440px;font-size:0.9rem;">
-    <div style="font-size:1.1rem;font-weight:bold;letter-spacing:0.06em;">TETRIS · COACH</div>
-    <div style="font-size:0.78rem;opacity:0.4;margin-bottom:0.8rem;">zen · calienta las manos · el coach te frena si había una jugada mejor</div>
-    <div id="tt-stats" style="font-size:0.8rem;margin-bottom:0.8rem;"></div>
-    <div id="tt-coach" style="min-height:4rem;margin-bottom:1rem;padding:0.8rem;border:1px solid var(--color-border-tertiary, rgba(128,128,128,0.35));"></div>
-    <div id="tt-settings" style="margin-bottom:1rem;"></div>
-    <details style="margin-bottom:0.5rem;"><summary style="cursor:pointer;">controles</summary>
-<pre style="margin:0.4rem 0 0;font-family:monospace;white-space:pre-wrap;font-size:0.82rem;">← →        mover
-↓          bajar suave
-Espacio    soltar (hard drop)
-↑ / X      girar a la derecha
-Z          girar a la izquierda
-A          girar 180°
-C / Shift  guardar (HOLD)
-Ctrl+Z     deshacer la última pieza
-Esc        pausa
-R / Enter  (cuando el coach te frena) reintentar / seguir</pre></details>
-    <details style="margin-bottom:0.5rem;"><summary style="cursor:pointer;">reglas básicas</summary>
-<div style="margin-top:0.4rem;font-size:0.85rem;">
-<p style="margin:0.4rem 0;"><b>1. Cero agujeros.</b> Un agujero es una casilla vacía con algo encima. No se puede rellenar hasta borrar todo lo que la tapa. Es el error #1.</p>
-<p style="margin:0.4rem 0;"><b>2. Abajo y plano.</b> Coloca cada pieza lo más abajo posible. Una superficie plana tiene sitio para las 7 piezas; una llena de picos, solo para 1 o 2.</p>
-<p style="margin:0.4rem 0;"><b>3. Nada de pozos profundos.</b> Un hueco de 1 de ancho y 3+ de profundo solo lo llena la I. Si dejas dos, una de ellas se convertirá en agujero.</p>
-<p style="margin:0.4rem 0;"><b>4. Mira el NEXT.</b> Antes de soltar, piensa dónde va la siguiente. No le quites su sitio.</p>
-<p style="margin:0.4rem 0;"><b>5. Usa HOLD.</b> Si la pieza actual no tiene buen sitio (una S o Z en suelo plano, por ejemplo), guárdala.</p>
-<p style="margin:0.4rem 0;"><b>6. Borra líneas.</b> Bajar el montón te da tiempo y espacio.</p>
-</div></details>
-    <details style="margin-bottom:1rem;"><summary style="cursor:pointer;">cómo decide el coach</summary>
-<div style="margin-top:0.4rem;font-size:0.82rem;opacity:0.85;">Prueba la pieza en cada giro y cada columna (y también la pieza de HOLD) y puntúa el tablero que queda con 6 criterios: altura donde cae, líneas borradas, agujeros, techos sobre huecos, filas fragmentadas y pozos. Usa los pesos del algoritmo El-Tetris (Dellacherie), que juega "limpio": prioriza un tablero sano y bajo, no acumular para hacer Tetris. Si tu jugada pierde más puntos que el límite de tu nivel, te frena.</div></details>
-    <div style="display:flex;gap:1.2rem;flex-wrap:wrap;">${btn('tt-reset', 'limpiar tablero', 'opacity:0.6;')}${btn('tt-back', 'back', 'opacity:0.7;')}</div>
+  <div style="flex:1;min-width:240px;max-width:360px;">
+    <div style="font-size:1.1rem;font-weight:bold;letter-spacing:0.06em;margin-bottom:0.15rem;">TETRIS</div>
+    <div id="tt-stats" style="font-size:0.78rem;opacity:0.5;margin-bottom:1rem;"></div>
+    <div id="tt-coach" style="min-height:3.2rem;margin-bottom:1.2rem;"></div>
+    <div id="tt-settings" style="margin-bottom:1rem;line-height:1.8;"></div>
+    <details style="margin-bottom:0.4rem;"><summary style="cursor:pointer;opacity:0.7;">controles</summary>
+<pre style="margin:0.4rem 0 0;font-family:monospace;white-space:pre-wrap;font-size:0.8rem;opacity:0.8;">← →     mover
+↓       bajar
+espacio soltar
+↑ / X   girar →
+Z       girar ←
+A       girar 180
+C/Shift hold
+Ctrl+Z  deshacer
+Esc     pausa</pre></details>
+    <details style="margin-bottom:1rem;"><summary style="cursor:pointer;opacity:0.7;">reglas</summary>
+<pre style="margin:0.4rem 0 0;font-family:monospace;white-space:pre-wrap;font-size:0.8rem;opacity:0.8;">1. cero agujeros
+2. abajo y plano
+3. sin pozos hondos
+4. mira el next
+5. hold si no hay sitio
+6. borra líneas</pre></details>
+    <div style="display:flex;gap:1.2rem;flex-wrap:wrap;">${btn('tt-reset', 'limpiar', 'opacity:0.5;')}${btn('tt-back', 'back', 'opacity:0.7;')}</div>
   </div>
 </div>`;
   ctx = setupCanvas($('tt-canvas'), CW, CH);
@@ -1785,6 +1715,7 @@ function closeTetris() {
   window.removeEventListener('keyup', onKeyUp);
   window.removeEventListener('blur', onBlur);
   onBlur();
+  if ('speechSynthesis' in window) window.speechSynthesis.cancel();
   if (mode === 'play') mode = 'paused';
   $('tetris-view').style.display = 'none';
   $('app').style.display = 'block';
