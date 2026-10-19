@@ -40,6 +40,9 @@
     <div style="cursor: pointer;" onclick="openTetris()">
       <span>Tetris</span>
     </div>
+    <div style="cursor: pointer;" onclick="openColorLab()">
+      <span>Color</span>
+    </div>
   </div>
   <div id="sens-config" style="display:none; margin-bottom:1rem; font-family:monospace;">
     <div style="margin-bottom:0.4rem;">
@@ -1738,6 +1741,495 @@ window.openTetris = function () {
 };
 })();
 // ===== FIN TETRIS COACH =====
+</script>
+
+<div id="colorlab-view" style="display:none; padding-bottom:2rem;"></div>
+
+<script>
+// ===== COLOR LAB =====
+// BallSheet-style reaction test with Valorant's 4 enemy highlight colors.
+// Lab mode controls everything except the color (paired situations, start zone,
+// foreperiod) and only decides a "best color" after 4 valid sessions.
+(function () {
+const COLOR_IDS = ['RED', 'PUR', 'YDE', 'YPR'];
+const COLOR_NAMES = { RED: 'red (default)', PUR: 'purple (tritanopia)', YDE: 'yellow (deuteranopia)', YPR: 'yellow (protanopia)' };
+const SIZES = { near: { r: 28, rim: 3, glow: 4 }, mid: { r: 16, rim: 2, glow: 3 }, far: { r: 9, rim: 1, glow: 2 } };
+const BACKGROUNDS = [
+  { id: 'range', a: '#d8c8a8', b: '#c4ae88' }, { id: 'wall', a: '#e8e4dc', b: '#cfc9bd' },
+  { id: 'dark', a: '#2a2c30', b: '#3a3d42' },  { id: 'warm', a: '#b9773f', b: '#7a4a2a' },
+  { id: 'cool', a: '#6f8fa8', b: '#3e5668' },  { id: 'mixed', a: '#d8c8a8', b: '#2f3a46' }
+];
+const PER_COLOR = 50, WARMUP = 30, PAUSE_EVERY = 50, PAUSE_S = 30, SESSIONS_NEEDED = 4;
+const HOLD_MS = 300, TIMEOUT_MS = 1500, MOVE_PX = 5, ZONE_R = 20;
+
+const DEFAULT_CFG = { sens: 1, RED: '#E6282D', PUR: '#C846F0', YDE: '#E6E646', YPR: '#D2E128' };
+let cfg = Object.assign({}, DEFAULT_CFG, JSON.parse(localStorage.getItem('colorlab_cfg') || '{}'));
+const loadTrials = () => JSON.parse(localStorage.getItem('colorlab_trials') || '[]');
+const loadSessions = () => JSON.parse(localStorage.getItem('colorlab_sessions') || '[]');
+
+// ---------- session generator (paired design) ----------
+function mulberry32(a) { return () => { a |= 0; a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
+function shuffle(a, rng) { for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(rng() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; }
+function truncExp(rng, min, max, mean) { let x; do { x = min - mean * Math.log(1 - rng()); } while (x > max); return x; }
+function buildSession(seed, perColor) {
+  const rng = mulberry32(seed);
+  const situations = [];
+  for (let i = 0; i < perColor; i++) {
+    situations.push({
+      size: ['near', 'mid', 'far'][i % 3],
+      dist: [200, 400, 600][Math.floor(i / 3) % 3],
+      angle: (i % 8) * 45 + (rng() * 20 - 10),
+      bg: i % BACKGROUNDS.length,
+      fore: truncExp(rng, 0.8, 2.0, 0.6)
+    });
+  }
+  shuffle(situations, rng);
+  const trials = [];
+  for (let b = 0; b < perColor / 2; b++) {
+    const block = [];
+    for (const c of COLOR_IDS) for (let k = 0; k < 2; k++) block.push({ color: c, ...situations[b * 2 + k] });
+    trials.push(...shuffle(block, rng));
+  }
+  return trials;
+}
+
+// ---------- stats ----------
+const median = a => { if (!a.length) return NaN; const s = [...a].sort((x, y) => x - y), m = s.length >> 1; return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2; };
+const MAD = a => { const m = median(a); return median(a.map(x => Math.abs(x - m))) * 1.4826; };
+function bootDiff(a, b, B) {
+  const diffs = [];
+  const pick = arr => Array.from({ length: arr.length }, () => arr[Math.floor(Math.random() * arr.length)]);
+  for (let i = 0; i < B; i++) diffs.push(median(pick(a)) - median(pick(b)));
+  diffs.sort((x, y) => x - y);
+  const p = Math.min(1, 2 * Math.min(diffs.filter(d => d <= 0).length, diffs.filter(d => d >= 0).length) / B);
+  return { diff: median(a) - median(b), ci: [diffs[Math.floor(B * 0.025)], diffs[Math.floor(B * 0.975)]], p };
+}
+function holm(ps) {
+  const order = ps.map((p, i) => [p, i]).sort((x, y) => x[0] - y[0]);
+  const adj = Array(ps.length);
+  let run = 0;
+  order.forEach(([p, i], k) => { run = Math.max(run, Math.min(1, (ps.length - k) * p)); adj[i] = run; });
+  return adj;
+}
+
+// Flags every trial of a session with why it was excluded (section 7 rules).
+function cleanSession(trials) {
+  trials.forEach(t => {
+    t.excl = t.anticipation ? 'antic' : t.timeout ? 'lapse' : t.rt < 100 ? 'antic' : t.rt > 1000 ? 'lapse' : t.dirErrorDeg > 45 ? 'dir' : null;
+  });
+  for (const c of COLOR_IDS) {
+    const ok = trials.filter(t => t.color === c && !t.excl);
+    const m = median(ok.map(t => t.rt)), mad = MAD(ok.map(t => t.rt));
+    ok.forEach(t => { if (t.rt > m + 2.5 * mad) t.excl = 'lapse'; });
+  }
+  const n = trials.length, excl = trials.filter(t => t.excl).length, antic = trials.filter(t => t.excl === 'antic').length;
+  return { valid: n > 0 && excl / n <= 0.1 && antic / n <= 0.05, exclPct: n ? excl / n : 0, anticPct: n ? antic / n : 0 };
+}
+
+// ---------- colors / luminance ----------
+const hexRgb = h => [1, 3, 5].map(i => parseInt(h.slice(i, i + 2), 16));
+const lin = v => { v /= 255; return v <= 0.04045 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); };
+const lum = ([r, g, b]) => 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b);
+
+// ---------- runtime state ----------
+let canvas, ctx, W, H, scale, bgCache = [], running = null;
+let cursor = { x: 0, y: 0 }, locked = false;
+
+function makeBackgrounds() {
+  bgCache = BACKGROUNDS.map((bg, i) => {
+    const c = document.createElement('canvas');
+    c.width = W; c.height = H;
+    const g = c.getContext('2d');
+    const grad = g.createLinearGradient(0, 0, i === 5 ? W : 0, H);
+    grad.addColorStop(0, bg.a); grad.addColorStop(1, bg.b);
+    g.fillStyle = grad; g.fillRect(0, 0, W, H);
+    const rng = mulberry32(i + 7); // soft blotches, blurred so nothing looks like a target
+    g.filter = 'blur(30px)';
+    for (let k = 0; k < 14; k++) {
+      g.globalAlpha = 0.12; g.fillStyle = rng() < 0.5 ? '#000' : '#fff';
+      g.beginPath(); g.ellipse(rng() * W, rng() * H, 60 + rng() * 200, 40 + rng() * 120, rng() * 3, 0, 7); g.fill();
+    }
+    g.filter = 'none'; g.globalAlpha = 1;
+    return { canvas: c, data: g.getImageData(0, 0, W, H).data };
+  });
+}
+function ringLum(bgIdx, x, y, r) {
+  const d = bgCache[bgIdx].data;
+  let s = 0, n = 0;
+  for (let k = 0; k < 16; k++) {
+    const a = k / 16 * Math.PI * 2;
+    const px = Math.round(x + Math.cos(a) * r), py = Math.round(y + Math.sin(a) * r);
+    if (px < 0 || py < 0 || px >= W || py >= H) continue;
+    const i = (py * W + px) * 4;
+    s += lum([d[i], d[i + 1], d[i + 2]]); n++;
+  }
+  return n ? s / n : 0;
+}
+
+function drawTarget(x, y, size, hex) {
+  const s = SIZES[size];
+  const r = s.r * scale, rim = Math.max(1, s.rim * scale), glow = s.glow * scale;
+  const [cr, cg, cb] = hexRgb(hex);
+  ctx.save();
+  ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2);
+  ctx.fillStyle = '#2E3236'; ctx.fill();
+  ctx.shadowColor = `rgba(${cr},${cg},${cb},0.35)`; ctx.shadowBlur = glow * 2;
+  ctx.lineWidth = rim; ctx.strokeStyle = hex; ctx.stroke();
+  ctx.restore();
+}
+function drawCursor() {
+  ctx.fillStyle = '#fff'; ctx.strokeStyle = '#000'; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.arc(cursor.x, cursor.y, 2.5, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+}
+function label(text, y, alpha) {
+  ctx.font = '14px monospace'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillStyle = `rgba(255,255,255,${alpha || 0.85})`; ctx.strokeStyle = 'rgba(0,0,0,0.6)'; ctx.lineWidth = 3;
+  ctx.strokeText(text, W / 2, y); ctx.fillText(text, W / 2, y);
+}
+
+// ---------- running a test ----------
+function startRun(kind) {
+  const view = document.getElementById('colorlab-view');
+  canvas = document.createElement('canvas');
+  canvas.style.cssText = 'position:fixed;inset:0;width:100vw;height:100vh;z-index:1000;cursor:none;background:#000;';
+  W = canvas.width = window.innerWidth; H = canvas.height = window.innerHeight;
+  scale = H / 1080;
+  ctx = canvas.getContext('2d');
+  view.appendChild(canvas);
+  makeBackgrounds();
+  cursor = { x: W / 2, y: H / 2 };
+
+  const sessions = loadSessions();
+  const seed = (Date.now() & 0x7fffffff) ^ (sessions.length * 7919);
+  running = {
+    kind, state: 'calib', calib: [], calibStart: null,
+    queue: kind === 'lab' ? buildSession(seed + 1, WARMUP).slice(0, WARMUP).map(t => ({ ...t, warmup: true })).concat(buildSession(seed, PER_COLOR)) : [],
+    session: sessions.length + 1, seed, records: [], valid: 0, trialNo: 0, earlyExits: 0,
+    arcade: { hits: [], target: null }
+  };
+  canvas.addEventListener('pointermove', onMove);
+  canvas.addEventListener('click', () => { if (!locked) lockPointer(); });
+  document.addEventListener('pointerlockchange', onLockChange);
+  document.addEventListener('keydown', onRunKey);
+  lockPointer();
+  requestAnimationFrame(frame);
+}
+function lockPointer() {
+  try {
+    const p = canvas.requestPointerLock({ unadjustedMovement: true });
+    if (p && p.catch) p.catch(() => { try { canvas.requestPointerLock(); } catch (e) { /* absolute fallback */ } });
+  } catch (e) { /* absolute fallback */ }
+}
+function onLockChange() {
+  locked = document.pointerLockElement === canvas;
+  // losing the lock mid-trial invalidates that trial; it gets re-queued
+  if (!locked && running && ['fore', 'target'].includes(running.state)) { requeue(); running.state = 'wait'; running.holdSince = null; }
+}
+function onRunKey(e) {
+  if (!running) return;
+  if (e.code === 'KeyQ' && !locked) stopRun(false);
+}
+function stopRun(finished) {
+  const r = running;
+  running = null;
+  if (document.pointerLockElement) document.exitPointerLock();
+  document.removeEventListener('pointerlockchange', onLockChange);
+  document.removeEventListener('keydown', onRunKey);
+  canvas.remove();
+  if (finished && r.kind === 'lab') saveSession(r);
+  if (r.kind === 'arcade') lastArcade = r.arcade.hits;
+  renderView();
+}
+function requeue() { const t = running.current; if (t) running.queue.push(t); running.current = null; }
+
+function onMove(e) {
+  const evs = e.getCoalescedEvents ? e.getCoalescedEvents() : [e];
+  for (const ev of (evs.length ? evs : [e])) {
+    if (locked) { cursor.x = Math.max(0, Math.min(W, cursor.x + ev.movementX * cfg.sens)); cursor.y = Math.max(0, Math.min(H, cursor.y + ev.movementY * cfg.sens)); }
+    else { cursor.x = ev.clientX; cursor.y = ev.clientY; }
+    if (running) sample(ev.timeStamp);
+  }
+}
+
+// Called for every high-frequency mouse sample.
+function sample(ts) {
+  const r = running;
+  if (r.kind === 'arcade') {
+    const a = r.arcade.target;
+    if (a && Math.hypot(cursor.x - a.x, cursor.y - a.y) <= a.r) {
+      r.arcade.hits.push({ color: a.color, ms: ts - a.t0 });
+      spawnArcade(ts);
+    }
+    return;
+  }
+  const t = r.current;
+  if (r.state === 'fore' && Math.hypot(cursor.x - W / 2, cursor.y - H / 2) > ZONE_R * scale) {
+    r.earlyExits++;
+    requeue(); r.state = 'wait'; r.holdSince = null;
+    if (!t.warmup) r.records.push({ ...baseRecord(t), anticipation: true, earlyExit: true });
+    return;
+  }
+  if (r.state !== 'target' || !t.t0) return;
+  const moved = Math.hypot(cursor.x - t.start.x, cursor.y - t.start.y);
+  if (!t.tMove && moved > MOVE_PX) t.tMove = ts;
+  if (t.dirErrorDeg == null && moved > 15 * scale) {
+    const a1 = Math.atan2(cursor.y - t.start.y, cursor.x - t.start.x), a2 = Math.atan2(t.y - t.start.y, t.x - t.start.x);
+    t.dirErrorDeg = Math.abs(((a1 - a2) * 180 / Math.PI + 540) % 360 - 180);
+  }
+  if (Math.hypot(cursor.x - t.x, cursor.y - t.y) <= t.r) finishTrial(ts, false);
+}
+
+function baseRecord(t) {
+  return {
+    session: running.session, trial: running.trialNo, block: Math.floor(running.valid / 8),
+    color: t.color, colorHex: cfg[t.color], size: t.size, distPx: Math.round(t.distPx || 0), angle: Math.round(t.angle),
+    bg: BACKGROUNDS[t.bg].id, foreperiod: +t.fore.toFixed(3), fps: running.fps, jitter: running.jitter
+  };
+}
+function finishTrial(ts, timeout) {
+  const r = running, t = r.current;
+  r.current = null; r.trialNo++;
+  if (!t.warmup) {
+    const rec = {
+      ...baseRecord(t), t0: +t.t0.toFixed(2), tMove: t.tMove ? +t.tMove.toFixed(2) : null, tHit: timeout ? null : +ts.toFixed(2),
+      rt: t.tMove ? +(t.tMove - t.t0).toFixed(2) : null, mt: !timeout && t.tMove ? +(ts - t.tMove).toFixed(2) : null,
+      total: timeout ? null : +(ts - t.t0).toFixed(2), dirErrorDeg: t.dirErrorDeg == null ? null : +t.dirErrorDeg.toFixed(1),
+      anticipation: false, timeout, bgLuminance: +t.bgL.toFixed(4), rimLuminance: +t.rimL.toFixed(4),
+      weberContrast: +((t.rimL - t.bgL) / Math.max(t.bgL, 0.005)).toFixed(3), browser: navigator.userAgent.match(/(Chrome|Firefox|Safari|Edg)\/[\d.]+/)?.[0] || ''
+    };
+    if (timeout) rec.rt = rec.rt ?? 1500;
+    r.records.push(rec);
+    r.valid++;
+    if (r.valid % PAUSE_EVERY === 0 && r.queue.length) { r.state = 'pause'; r.pauseEnd = performance.now() + PAUSE_S * 1000; return; }
+  }
+  r.state = r.queue.length ? 'wait' : 'done';
+  r.holdSince = null;
+}
+
+function spawnArcade(ts) {
+  const c = COLOR_IDS[Math.floor(Math.random() * 4)], size = ['near', 'mid', 'far'][Math.floor(Math.random() * 3)];
+  const m = 60 * scale;
+  running.arcade.target = { color: c, size, x: m + Math.random() * (W - 2 * m), y: m + Math.random() * (H - 2 * m), r: SIZES[size].r * scale, t0: ts, bg: Math.floor(Math.random() * BACKGROUNDS.length) };
+}
+
+function frame(ts) {
+  const r = running;
+  if (!r) return;
+  // fps + jitter during the first 2 s
+  if (r.state === 'calib') {
+    if (r.calibStart == null) r.calibStart = ts; else r.calib.push(ts - r.lastTs);
+    r.lastTs = ts;
+    if (ts - r.calibStart >= 2000) {
+      const mean = r.calib.reduce((s, d) => s + d, 0) / r.calib.length;
+      r.fps = +(1000 / mean).toFixed(1);
+      r.jitter = +Math.sqrt(r.calib.reduce((s, d) => s + (d - mean) ** 2, 0) / r.calib.length).toFixed(2);
+      r.state = r.kind === 'lab' ? 'wait' : 'arcade';
+      if (r.kind === 'arcade') spawnArcade(ts);
+    }
+  }
+  const bgIdx = r.kind === 'arcade' ? (r.arcade.target ? r.arcade.target.bg : 0) : (r.current || r.queue[0] || { bg: 0 }).bg;
+  ctx.drawImage(bgCache[bgIdx].canvas, 0, 0);
+  const cx = W / 2, cy = H / 2, zr = ZONE_R * scale;
+
+  if (r.state === 'calib') label('midiendo fps…', cy);
+  else if (r.kind === 'arcade') {
+    const a = r.arcade.target;
+    if (a) drawTarget(a.x, a.y, a.size, cfg[a.color]);
+    if (a && ts - a.t0 > 3000) spawnArcade(ts);
+    const hs = r.arcade.hits;
+    label(`arcade · ${hs.length} · ${hs.length ? Math.round(hs.reduce((s, h) => s + h.ms, 0) / hs.length) + ' ms' : ''}`, 24 * scale + 10, 0.6);
+    if (!locked) label('click para jugar · q salir', H - 30, 0.7);
+  } else if (r.state === 'pause') {
+    const left = Math.ceil((r.pauseEnd - ts) / 1000);
+    label(left > 0 ? `pausa ${left}s` : 'pon el cursor en el círculo', cy - 50);
+    if (left <= 0) { r.state = 'wait'; r.holdSince = null; }
+  } else if (r.state === 'done') {
+    stopRun(true); return;
+  } else {
+    ctx.strokeStyle = 'rgba(255,255,255,0.8)'; ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.arc(cx, cy, zr, 0, Math.PI * 2); ctx.stroke();
+    const inZone = Math.hypot(cursor.x - cx, cursor.y - cy) <= zr;
+    if (r.state === 'wait') {
+      if (inZone && locked !== null) {
+        if (r.holdSince == null) r.holdSince = ts;
+        if (ts - r.holdSince >= HOLD_MS) {
+          const t = r.queue.shift();
+          const ds = Math.min(1, (Math.min(W, H) / 2 - 40) / 600); // keep the farthest target on screen
+          t.distPx = t.dist * scale * ds;
+          t.x = cx + Math.cos(t.angle * Math.PI / 180) * t.distPx; t.y = cy + Math.sin(t.angle * Math.PI / 180) * t.distPx;
+          t.r = SIZES[t.size].r * scale;
+          t.rimL = lum(hexRgb(cfg[t.color]));
+          t.bgL = ringLum(t.bg, t.x, t.y, t.r + SIZES[t.size].glow * scale + 10);
+          t.foreEnd = ts + t.fore * 1000; t.t0 = null; t.tMove = null; t.dirErrorDeg = null;
+          r.current = t; r.state = 'fore';
+        }
+      } else r.holdSince = null;
+    }
+    if (r.state === 'fore' && ts >= r.current.foreEnd) { r.state = 'target'; r.current.pendingDraw = true; }
+    if (r.state === 'target') {
+      const t = r.current;
+      drawTarget(t.x, t.y, t.size, cfg[t.color]);
+      if (t.pendingDraw) { t.t0 = ts; t.start = { x: cursor.x, y: cursor.y }; t.pendingDraw = false; } // t0 = frame that first shows it
+      else if (ts - t.t0 > TIMEOUT_MS) finishTrial(ts, true);
+    }
+    const total = WARMUP + PER_COLOR * 4, done = r.trialNo;
+    label(done < WARMUP ? `calentamiento ${done}/${WARMUP}` : `${r.valid}/${PER_COLOR * 4}`, 24 * scale + 10, 0.5);
+    if (!locked) label('click para bloquear el mouse · q salir (se descarta)', H - 30, 0.7);
+    if (r.jitter > 2) label(`jitter ${r.jitter} ms · cierra otras pestañas`, H - 55, 0.6);
+  }
+  drawCursor();
+  requestAnimationFrame(frame);
+}
+
+// ---------- saving + analysis ----------
+function saveSession(r) {
+  const trials = loadTrials(), sessions = loadSessions();
+  const q = cleanSession(r.records);
+  trials.push(...r.records);
+  sessions.push({ n: r.session, date: new Date().toISOString().slice(0, 10), fps: r.fps, jitter: r.jitter, valid: q.valid,
+                  exclPct: +q.exclPct.toFixed(3), anticPct: +q.anticPct.toFixed(3), earlyExits: r.earlyExits });
+  localStorage.setItem('colorlab_trials', JSON.stringify(trials));
+  localStorage.setItem('colorlab_sessions', JSON.stringify(sessions));
+}
+
+function analyze() {
+  const sessions = loadSessions(), all = loadTrials();
+  const validS = sessions.filter(s => s.valid).map(s => s.n);
+  const bySession = {};
+  all.forEach(t => (bySession[t.session] = bySession[t.session] || []).push(t));
+  Object.values(bySession).forEach(cleanSession);
+  const used = all.filter(t => validS.includes(t.session));
+  const clean = used.filter(t => !t.excl);
+  const rts = c => clean.filter(t => t.color === c).map(t => t.rt);
+  const rows = COLOR_IDS.map(c => ({
+    c, med: median(rts(c)), mt: median(clean.filter(t => t.color === c && t.mt != null).map(t => t.mt)),
+    errs: used.filter(t => t.color === c && (t.excl === 'dir' || t.excl === 'lapse')).length, n: rts(c).length
+  })).filter(x => x.n).sort((a, b) => a.med - b.med);
+  return { sessions, validS, used, clean, rows, rts };
+}
+
+function verdict(A) {
+  const { rows, rts, validS, clean } = A;
+  if (rows.length < 2) return null;
+  const pairs = [];
+  for (let i = 0; i < rows.length; i++) for (let j = i + 1; j < rows.length; j++) pairs.push([rows[i].c, rows[j].c]);
+  const tests = pairs.map(([a, b]) => bootDiff(rts(a), rts(b), 2000));
+  const adj = holm(tests.map(t => t.p));
+  const best = rows[0], second = rows[1];
+  const k = pairs.findIndex(([a, b]) => a === best.c && b === second.c);
+  const sessWins = validS.filter(s => {
+    const meds = COLOR_IDS.map(c => [c, median(clean.filter(t => t.session === s && t.color === c).map(t => t.rt))]).filter(x => !isNaN(x[1]));
+    return meds.length && meds.sort((x, y) => x[1] - y[1])[0][0] === best.c;
+  }).length;
+  const conds = [
+    adj[k] < 0.05,
+    second.med - best.med >= 10,
+    sessWins >= Math.ceil(validS.length * 0.75),
+    best.errs <= second.errs
+  ];
+  return { best, second, test: tests[k], p: adj[k], sessWins, conds, win: conds.every(Boolean) };
+}
+
+// ---------- panel ----------
+let lastArcade = null;
+const sw = c => `<span style="color:${cfg[c]};">■</span>`;
+const pad = (s, n) => (s + ' '.repeat(n)).slice(0, n);
+
+function resultsHTML() {
+  const A = analyze();
+  if (!A.rows.length) return '<span style="opacity:0.5;">  sin datos todavía.</span>';
+  const min = A.rows[0].med, max = A.rows[A.rows.length - 1].med;
+  let out = `resultado · ${A.validS.length} sesión(es) válida(s) · ${A.clean.length} ensayos\n\n`;
+  A.rows.forEach(x => {
+    const bar = '█'.repeat(6 + Math.round(10 * (max - x.med) / Math.max(1, max - min)));
+    out += `${sw(x.c)} ${pad(COLOR_NAMES[x.c], 22)} ${String(Math.round(x.med)).padStart(4)} ms  ${bar}\n`;
+  });
+  out += `\n<span style="opacity:0.55;">mt (movimiento): ${A.rows.map(x => x.c + ' ' + Math.round(x.mt)).join(' · ')}</span>\n`;
+
+  const v = A.validS.length >= 2 ? verdict(A) : null;
+  if (A.validS.length < SESSIONS_NEEDED) {
+    out += `\nveredicto: <span style="opacity:0.6;">bloqueado hasta ${SESSIONS_NEEDED} sesiones válidas (${A.validS.length}/${SESSIONS_NEEDED}) · ranking orientativo</span>\n`;
+  } else if (v) {
+    const ci = v.test.ci.map(d => Math.round(d)).join(', ');
+    out += v.win
+      ? `\nveredicto: <span style="color:#5cb85c;">${COLOR_NAMES[v.best.c]}</span> (${Math.round(v.test.diff)} ms vs ${v.second.c}, ic95 [${ci}], ganó ${v.sessWins}/${A.validS.length} sesiones)\n`
+      : `\nveredicto: <span style="color:#d9534f;">empate práctico</span> <span style="opacity:0.6;">· elige por comodidad o por tu mira</span>\n`;
+    const names = ['ic excluye 0', '≥ 10 ms', 'gana ≥3/4 sesiones', 'no más errores'];
+    out += `<span style="opacity:0.55;">${names.map((n, i) => (v.conds[i] ? '✓ ' : '✗ ') + n).join(' · ')}</span>\n`;
+  }
+
+  const table = (title, key, cats) => {
+    let s = `\n${title}\n${pad('', 8)}${COLOR_IDS.map(c => pad(c, 6)).join('')}\n`;
+    cats.forEach(cat => {
+      s += pad(cat, 8) + COLOR_IDS.map(c => { const m = median(A.clean.filter(t => t[key] === cat && t.color === c).map(t => t.rt)); return pad(isNaN(m) ? '—' : String(Math.round(m)), 6); }).join('') + '\n';
+    });
+    return s;
+  };
+  out += `<span style="opacity:0.75;">${table('por distancia', 'size', ['near', 'mid', 'far'])}${table('por fondo', 'bg', BACKGROUNDS.map(b => b.id))}</span>`;
+  return out;
+}
+
+function exportCSV() {
+  const trials = loadTrials();
+  if (!trials.length) return;
+  const cols = Object.keys(trials.reduce((o, t) => Object.assign(o, t), {}));
+  const csv = [cols.join(',')].concat(trials.map(t => cols.map(k => t[k] ?? '').join(','))).join('\n');
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
+  a.download = 'colorlab.csv'; a.click();
+}
+
+function renderView() {
+  const view = document.getElementById('colorlab-view');
+  const sessions = loadSessions(), validN = sessions.filter(s => s.valid).length;
+  const last = sessions[sessions.length - 1];
+  const inp = (id, v, w) => `<input id="${id}" value="${v}" style="width:${w}px;background:transparent;border:none;border-bottom:1px solid currentColor;color:inherit;font:inherit;outline:none;text-align:center;">`;
+  const arcadeTxt = lastArcade && lastArcade.length
+    ? `<div style="font-size:0.8rem;opacity:0.6;margin-bottom:1rem;">arcade: ${lastArcade.length} hits · ${COLOR_IDS.map(c => { const h = lastArcade.filter(x => x.color === c); return c + ' ' + (h.length ? Math.round(h.reduce((s, x) => s + x.ms, 0) / h.length) : '—'); }).join(' · ')} ms</div>` : '';
+  view.innerHTML = `<div style="max-width:560px;">
+<div style="font-family:monospace;font-size:1.1rem;font-weight:bold;margin-bottom:0.15rem;letter-spacing:0.06em;">COLOR LAB</div>
+<div style="font-family:monospace;font-size:0.78rem;opacity:0.4;margin-bottom:1rem;">¿qué color de enemigo ves más rápido? · ballsheet lab</div>
+<div style="font-size:0.8rem;margin-bottom:0.8rem;">sesión ${sessions.length + 1} · válidas ${validN}/${SESSIONS_NEEDED}${last ? ` · última: ${last.valid ? '<span style="color:#5cb85c;">válida</span>' : '<span style="color:#d9534f;">no válida</span>'} · ${last.fps} fps` : ''}</div>
+<div style="display:flex;gap:1.2rem;flex-wrap:wrap;margin-bottom:1rem;">
+  <span id="cl-lab" style="cursor:pointer;">[ start lab ]</span>
+  <span id="cl-arcade" style="cursor:pointer;opacity:0.7;">[ arcade ]</span>
+  <span id="cl-csv" style="cursor:pointer;opacity:0.7;">[ csv ]</span>
+  <span id="cl-reset" style="cursor:pointer;opacity:0.4;">[ reset ]</span>
+  <span id="cl-back" style="cursor:pointer;opacity:0.7;">[ back ]</span>
+</div>
+<div style="font-size:0.78rem;opacity:0.5;margin-bottom:0.4rem;">cursor en el círculo · espera · ve al objetivo sin clic · ~12 min · 4 días distintos</div>
+<div style="font-size:0.85rem;margin-bottom:1.2rem;">sens ${inp('cl-sens', cfg.sens, 44)} · ${COLOR_IDS.map(c => `${sw(c)} ${inp('cl-' + c, cfg[c], 70)}`).join(' ')}</div>
+${arcadeTxt}
+<pre style="margin:0 0 1.2rem;font-family:monospace;white-space:pre-wrap;font-size:0.85rem;line-height:1.5;">${resultsHTML()}</pre>
+<div style="font-size:0.75rem;opacity:0.4;line-height:1.5;">es una pista de laboratorio, no garantía en partida · el rojo puede ganar por costumbre<br>usa el mismo monitor, vibrance y hdr con los que juegas · menos de ~10 ms no importa</div>
+</div>`;
+  const $ = id => document.getElementById(id);
+  $('cl-lab').onclick = () => startRun('lab');
+  $('cl-arcade').onclick = () => startRun('arcade');
+  $('cl-csv').onclick = exportCSV;
+  $('cl-reset').onclick = () => {
+    if (!confirm('¿borrar todas las sesiones del color lab?')) return;
+    localStorage.removeItem('colorlab_trials'); localStorage.removeItem('colorlab_sessions'); renderView();
+  };
+  $('cl-back').onclick = () => { view.style.display = 'none'; $('app').style.display = 'block'; };
+  $('cl-sens').onchange = e => { cfg.sens = parseFloat(e.target.value) || 1; saveCfg(); };
+  COLOR_IDS.forEach(c => {
+    $('cl-' + c).onchange = e => {
+      const v = e.target.value.trim().toUpperCase();
+      if (/^#[0-9A-F]{6}$/.test(v)) { cfg[c] = v; saveCfg(); renderView(); } else e.target.value = cfg[c];
+    };
+  });
+}
+function saveCfg() { localStorage.setItem('colorlab_cfg', JSON.stringify(cfg)); }
+
+window.openColorLab = function () {
+  document.getElementById('app').style.display = 'none';
+  document.getElementById('colorlab-view').style.display = 'block';
+  renderView();
+};
+window.__colorlab = { buildSession, cleanSession, bootDiff, holm, median };
+})();
+// ===== FIN COLOR LAB =====
 </script>
 
 </body>
